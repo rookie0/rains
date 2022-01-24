@@ -10,7 +10,7 @@ use reqwest::{
 };
 use scraper::{Html, Selector};
 
-use crate::invest::{stock::Profile, Exchange, Investment, Market};
+use crate::invest::{quote::Quote, stock::Profile, Exchange, Investment, Market};
 
 #[derive(Debug)]
 pub struct Sina {
@@ -124,18 +124,47 @@ impl Sina {
         }
     }
 
+    pub async fn quote(&self, symbol: &str) -> Result<Quote> {
+        match self.request(&format!("https://hq.sinajs.cn/list={}", symbol.to_lowercase())).await {
+            Ok(content) => {
+                if let Some(caps) = Regex::new("\"(.*)\"").unwrap().captures(&content) {
+                    let values = caps.get(1).unwrap().as_str().split(',').collect::<Vec<&str>>();
+
+                    return Ok(Quote {
+                        symbol: symbol.to_string(),
+                        name: values.get(0).unwrap().to_string(),
+                        now: values.get(3).unwrap().to_string(),
+                        close: values.get(2).unwrap().to_string(),
+                        open: values.get(1).unwrap().to_string(),
+                        high: values.get(4).unwrap().to_string(),
+                        low: values.get(5).unwrap().to_string(),
+                        buy: values.get(6).unwrap().to_string(),
+                        sell: values.get(7).unwrap().to_string(),
+                        turnover: values.get(8).unwrap().to_string(),
+                        volume: values.get(9).unwrap().to_string(),
+                        date: values.get(30).unwrap().to_string(),
+                        time: values.get(31).unwrap().to_string(),
+                    });
+                }
+
+                Ok(Quote::default())
+            }
+            Err(err) => bail!(err),
+        }
+    }
+
     async fn request(&self, url: &str) -> Result<String> {
         match self.client.get(url).send().await {
             Ok(resp) => {
                 let status = &resp.status();
                 let content = &resp.text().await.unwrap();
                 if status != &StatusCode::OK {
-                    bail!("error, http code: {}, content: {}", status, &content)
+                    bail!("request return error, http code: {}, content: {}", status, &content)
                 }
 
                 Ok(content.to_string())
             }
-            Err(err) => bail!("request failed, error: {}", err),
+            Err(err) => bail!("request failed, {}", err),
         }
     }
 }

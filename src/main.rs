@@ -1,4 +1,5 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
+use owo_colors::OwoColorize;
 use rains::{
     cli::{Opts, Subcommand},
     sina::Sina,
@@ -24,25 +25,98 @@ async fn run() -> Result<()> {
     debug!("args: {:?}", args);
 
     match args.cmd {
-        Subcommand::Search { query, limit } => {
-            let results = Sina::default().search(&query).await.unwrap();
-            let limit = if (limit as usize) < results.len() { limit as usize } else { results.len() };
-            for i in 0..limit {
-                let invest = results.get(i).unwrap();
-                println!("{} \t {}", invest.symbol, invest.name);
-            }
-        }
-        Subcommand::Info { symbol, .. } => {
-            match Regex::new(r"^(SZ|SH|BJ)\d{6}").unwrap().captures(&symbol.to_uppercase()) {
-                Some(caps) if symbol.len() == 8 => {
-                    let code = &caps.get(0).unwrap().as_str()[2..];
-                    let profile = Sina::default().profile(code).await.unwrap();
-                    println!("证券代码：\t{}\n简称历史：\t{}\n公司名称：\t{}\n主营业务：\t{}\n公司网址：\t{}\n办公地址：\t{}\n上市日期：\t{}\n发行价格：\t{}", symbol, profile.used_name, profile.name, profile.business, profile.website, profile.business_address, profile.listing_date, profile.listing_price);
+        Subcommand::Search { query, limit } => match Sina::default().search(&query).await {
+            Ok(results) => {
+                let limit = if (limit as usize) < results.len() { limit as usize } else { results.len() };
+                for i in 0..limit {
+                    let invest = results.get(i).unwrap();
+                    println!("{} \t {}", invest.symbol, invest.name);
                 }
-                _ => eprintln!("当前仅支持沪深及北证股票信息查询"),
             }
-        }
+            Err(err) => eprintln!("{}", err),
+        },
+        Subcommand::Info { symbol, .. } => match check_symbol(&symbol) {
+            Ok(symbol) => {
+                let code = &symbol[2..];
+                match Sina::default().profile(code).await {
+                    Ok(profile) => {
+                        println!("证券代码：\t{}\n公司名称：\t{}\n主营业务：\t{}\n公司网址：\t{}\n办公地址：\t{}\n上市日期：\t{}\n发行价格：\t{}\n简称历史：\t{}",
+                                 symbol,
+                                 profile.name,
+                                 profile.business,
+                                 profile.website.underline(),
+                                 profile.business_address,
+                                 profile.listing_date,
+                                 profile.listing_price,
+                                 profile.used_name,
+                        );
+                    }
+                    Err(err) => eprintln!("{}", err),
+                }
+
+                // todo other info
+            }
+            Err(err) => eprintln!("{}", err),
+        },
+        Subcommand::Quote { symbol, .. } => match check_symbol(&symbol) {
+            Ok(symbol) => {
+                match Sina::default().quote(&symbol).await {
+                    Ok(quote) => {
+                        let now = quote.now.parse::<f64>().unwrap();
+                        let close = quote.close.parse::<f64>().unwrap();
+                        let rate = (now / close - 1.0) * 100.0;
+                        let now = format!("￥{:.2} {:.2}%", now, rate);
+                        println!("{} {}  {}\t昨收：{:.2}\t今开：{:.2}\t最高：{:.2}\t最低：{:.2}\t成交量：{}手\t成交额：{}元\t{}",
+                            quote.date,
+                            quote.time,
+                            match rate {
+                                _ if rate > 0.0 => {
+                                    now.red().to_string()
+                                }
+                                _ if rate < 0.0 => {
+                                    now.green().to_string()
+                                }
+                                _ => {
+                                    now.default_color().to_string()
+                                }
+                            }
+                                .bold()
+                                .underline(),
+                            close,
+                            quote.open.parse::<f64>().unwrap(),
+                            quote.high.parse::<f64>().unwrap(),
+                            quote.low.parse::<f64>().unwrap(),
+                            fmt_num(&(quote.turnover.parse::<f64>().unwrap() / 100.0)),
+                            fmt_num(&quote.volume.parse::<f64>().unwrap()),
+                            quote.name,
+                        );
+                    }
+                    Err(err) => eprintln!("{}", err),
+                }
+
+                // todo ws realtime
+            }
+            Err(err) => eprintln!("{}", err),
+        },
     }
 
     Ok(())
+}
+
+fn check_symbol(symbol: &str) -> Result<String> {
+    match Regex::new(r"^(SZ|SH|BJ)\d{6}").unwrap().captures(&symbol.to_uppercase()) {
+        Some(caps) if symbol.len() == 8 => Ok(caps.get(0).unwrap().as_str().to_uppercase()),
+        _ => bail!("当前仅支持沪深及北证股票信息查询"),
+    }
+}
+
+fn fmt_num(num: &f64) -> String {
+    match num {
+        _ if *num > 100_000_000.0 => {
+            format!("{:.2}亿", num / 100_000_000.0)
+        }
+        _ => {
+            format!("{:.2}万", num / 10_000.0)
+        }
+    }
 }
