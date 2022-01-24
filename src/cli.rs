@@ -16,6 +16,7 @@ pub enum Subcommand {
     /// 搜索 拼音/代码/名称 eg: zgpa
     #[clap(alias = "s")]
     Search {
+        /// 拼音/代码/名称
         #[clap(required = true)]
         query: String,
         /// 条数 默认10条
@@ -25,6 +26,7 @@ pub enum Subcommand {
     /// 公司信息 eg: SH601318
     #[clap(alias = "i")]
     Info {
+        /// 证券代码
         #[clap(required = true)]
         symbol: String,
         #[clap(short, long)]
@@ -37,6 +39,15 @@ pub enum Subcommand {
         dividends: bool,
         #[clap(short, long)]
         presses: bool,
+    },
+    /// 行情报价 eg: SH601318
+    #[clap(alias = "q")]
+    Quote {
+        /// 证券代码
+        #[clap(required = true)]
+        symbol: String,
+        #[clap(short, long)]
+        realtime: bool,
     },
 }
 
