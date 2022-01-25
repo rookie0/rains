@@ -2,6 +2,7 @@ use anyhow::{bail, Result};
 use owo_colors::OwoColorize;
 use rains::{
     cli::{Opts, Subcommand},
+    invest::quote::Quote,
     sina::Sina,
 };
 use regex::Regex;
@@ -58,43 +59,22 @@ async fn run() -> Result<()> {
             }
             Err(err) => eprintln!("{}", err),
         },
-        Subcommand::Quote { symbol, .. } => match check_symbol(&symbol) {
+        Subcommand::Quote { symbol, realtime } => match check_symbol(&symbol) {
             Ok(symbol) => {
-                match Sina::default().quote(&symbol).await {
-                    Ok(quote) => {
-                        let now = quote.now.parse::<f64>().unwrap();
-                        let close = quote.close.parse::<f64>().unwrap();
-                        let rate = (now / close - 1.0) * 100.0;
-                        let now = format!("￥{:.2} {:.2}%", now, rate);
-                        println!("{} {}  {}\t昨收：{:.2}\t今开：{:.2}\t最高：{:.2}\t最低：{:.2}\t成交量：{}手\t成交额：{}元\t{}",
-                            quote.date,
-                            quote.time,
-                            match rate {
-                                _ if rate > 0.0 => {
-                                    now.red().to_string()
-                                }
-                                _ if rate < 0.0 => {
-                                    now.green().to_string()
-                                }
-                                _ => {
-                                    now.default_color().to_string()
-                                }
-                            }
-                                .bold()
-                                .underline(),
-                            close,
-                            quote.open.parse::<f64>().unwrap(),
-                            quote.high.parse::<f64>().unwrap(),
-                            quote.low.parse::<f64>().unwrap(),
-                            fmt_num(&(quote.turnover.parse::<f64>().unwrap() / 100.0)),
-                            fmt_num(&quote.volume.parse::<f64>().unwrap()),
-                            quote.name,
-                        );
+                if realtime {
+                    Sina::default()
+                        .quote_ws(&symbol, |quote: Quote| {
+                            write_quote(&quote);
+                        })
+                        .await;
+                } else {
+                    match Sina::default().quote(&symbol).await {
+                        Ok(quote) => {
+                            write_quote(&quote);
+                        }
+                        Err(err) => eprintln!("{}", err),
                     }
-                    Err(err) => eprintln!("{}", err),
                 }
-
-                // todo ws realtime
             }
             Err(err) => eprintln!("{}", err),
         },
@@ -119,4 +99,36 @@ fn fmt_num(num: &f64) -> String {
             format!("{:.2}万", num / 10_000.0)
         }
     }
+}
+
+fn write_quote(quote: &Quote) {
+    let now = quote.now.parse::<f64>().unwrap();
+    let close = quote.close.parse::<f64>().unwrap();
+    let rate = (now / close - 1.0) * 100.0;
+    let now = format!("￥{:.2} {:.2}%", now, rate);
+    println!(
+        "{} {}  {}\t昨收：{:.2}\t今开：{:.2}\t最高：{:.2}\t最低：{:.2}\t成交量：{}手\t成交额：{}元\t{}",
+        quote.date,
+        quote.time,
+        match rate {
+            _ if rate > 0.0 => {
+                now.red().to_string()
+            }
+            _ if rate < 0.0 => {
+                now.green().to_string()
+            }
+            _ => {
+                now.default_color().to_string()
+            }
+        }
+        .bold()
+        .underline(),
+        close,
+        quote.open.parse::<f64>().unwrap(),
+        quote.high.parse::<f64>().unwrap(),
+        quote.low.parse::<f64>().unwrap(),
+        fmt_num(&(quote.turnover.parse::<f64>().unwrap() / 100.0)),
+        fmt_num(&quote.volume.parse::<f64>().unwrap()),
+        quote.name,
+    );
 }
