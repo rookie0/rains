@@ -46,6 +46,7 @@ pub enum Subcommand {
         /// 证券代码
         #[clap(required = true)]
         symbol: String,
+        /// 实时行情
         #[clap(short, long)]
         realtime: bool,
     },

@@ -3,14 +3,21 @@
 use std::{str::FromStr, time::Duration};
 
 use anyhow::{bail, Result};
+use futures_util::{SinkExt, StreamExt};
+use http::{Method, Request};
 use regex::Regex;
 use reqwest::{
     header::{self, HeaderMap, HeaderValue},
     Client, StatusCode,
 };
 use scraper::{Html, Selector};
+use tokio::{select, time::interval};
+use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tracing::debug;
 
 use crate::invest::{quote::Quote, stock::Profile, Exchange, Investment, Market};
+
+const SOURCE: &str = "https://finance.sina.com.cn";
 
 #[derive(Debug)]
 pub struct Sina {
@@ -20,7 +27,7 @@ pub struct Sina {
 impl Default for Sina {
     fn default() -> Self {
         let mut headers = HeaderMap::new();
-        headers.insert(header::REFERER, HeaderValue::from_static("https://finance.sina.com.cn/"));
+        headers.insert(header::REFERER, HeaderValue::from_static(SOURCE));
         let client = Client::builder().default_headers(headers).timeout(Duration::from_secs(5)).build().unwrap();
         Sina { client }
     }
@@ -128,23 +135,10 @@ impl Sina {
         match self.request(&format!("https://hq.sinajs.cn/list={}", symbol.to_lowercase())).await {
             Ok(content) => {
                 if let Some(caps) = Regex::new("\"(.*)\"").unwrap().captures(&content) {
-                    let values = caps.get(1).unwrap().as_str().split(',').collect::<Vec<&str>>();
+                    let mut quote = Quote::from(caps.get(1).unwrap().as_str());
+                    quote.symbol = symbol.to_string();
 
-                    return Ok(Quote {
-                        symbol: symbol.to_string(),
-                        name: values.get(0).unwrap().to_string(),
-                        now: values.get(3).unwrap().to_string(),
-                        close: values.get(2).unwrap().to_string(),
-                        open: values.get(1).unwrap().to_string(),
-                        high: values.get(4).unwrap().to_string(),
-                        low: values.get(5).unwrap().to_string(),
-                        buy: values.get(6).unwrap().to_string(),
-                        sell: values.get(7).unwrap().to_string(),
-                        turnover: values.get(8).unwrap().to_string(),
-                        volume: values.get(9).unwrap().to_string(),
-                        date: values.get(30).unwrap().to_string(),
-                        time: values.get(31).unwrap().to_string(),
-                    });
+                    return Ok(quote);
                 }
 
                 Ok(Quote::default())
@@ -165,6 +159,40 @@ impl Sina {
                 Ok(content.to_string())
             }
             Err(err) => bail!("request failed, {}", err),
+        }
+    }
+
+    pub async fn quote_ws(&self, symbol: &str, handler: impl Fn(Quote)) {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(format!("wss://hq.sinajs.cn/wskt?list={}", symbol.to_lowercase()))
+            .header(header::ORIGIN, HeaderValue::from_static(SOURCE))
+            .body(())
+            .unwrap();
+
+        let (ws, _) = connect_async(req).await.unwrap();
+        let (mut sender, mut receiver) = ws.split();
+        let mut interval = interval(Duration::from_secs(60));
+
+        loop {
+            select! {
+                msg = receiver.next() => {
+                    if let Some(msg) = msg {
+                        let msg = msg.unwrap();
+                        if msg.is_text() {
+                            debug!("ws receive msg: {}", msg);
+                            if let Some(caps) = Regex::new("=(.*)\\n").unwrap().captures(&msg.to_string()) {
+                                let mut quote = Quote::from(caps.get(1).unwrap().as_str());
+                                quote.symbol = symbol.to_string();
+                                handler(quote);
+                            }
+                        }
+                    }
+                }
+                _ = interval.tick() => {
+                    sender.send(Message::Text("".to_string())).await.unwrap();
+                }
+            }
         }
     }
 }
