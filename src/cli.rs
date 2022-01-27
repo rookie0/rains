@@ -29,14 +29,19 @@ pub enum Subcommand {
         /// 证券代码
         #[clap(required = true)]
         symbol: String,
+        /// 全部信息
         #[clap(short, long)]
         all: bool,
+        /// 财务指标
         #[clap(short, long)]
         financials: bool,
+        /// 股东结构
         #[clap(short, long)]
         structure: bool,
+        /// 分红送配
         #[clap(short, long)]
         dividends: bool,
+        /// 最新公告
         #[clap(short, long)]
         presses: bool,
     },
@@ -49,6 +54,9 @@ pub enum Subcommand {
         /// 实时行情
         #[clap(short, long)]
         realtime: bool,
+        /// 实时行情多行展示 默认单行
+        #[clap(short, long)]
+        multiline: bool,
     },
 }
 

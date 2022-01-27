@@ -1,4 +1,7 @@
+use std::io::{stdout, Write};
+
 use anyhow::{bail, Result};
+use crossterm::{cursor, style::Stylize, ExecutableCommand};
 use owo_colors::OwoColorize;
 use rains::{
     cli::{Opts, Subcommand},
@@ -6,7 +9,8 @@ use rains::{
     sina::Sina,
 };
 use regex::Regex;
-use tracing::{debug, Level};
+use tracing::debug;
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
@@ -16,10 +20,13 @@ async fn main() {
     }
 }
 
+// todo use tui table & chart
+
 async fn run() -> Result<()> {
     let args = Opts::parse_args()?;
     if args.debug {
-        tracing_subscriber::fmt().with_max_level(Level::DEBUG).init();
+        let filter = "debug,html5ever=info,selectors=info".parse::<EnvFilter>().unwrap();
+        tracing_subscriber::fmt().with_env_filter(filter).init();
     } else {
         tracing_subscriber::fmt().without_time().with_target(false).init();
     }
@@ -36,12 +43,14 @@ async fn run() -> Result<()> {
             }
             Err(err) => eprintln!("{}", err),
         },
-        Subcommand::Info { symbol, .. } => match check_symbol(&symbol) {
+        Subcommand::Info { symbol, all, financials, structure, dividends, presses } => match check_symbol(&symbol) {
             Ok(symbol) => {
                 let code = &symbol[2..];
-                match Sina::default().profile(code).await {
-                    Ok(profile) => {
-                        println!("证券代码：\t{}\n公司名称：\t{}\n主营业务：\t{}\n公司网址：\t{}\n办公地址：\t{}\n上市日期：\t{}\n发行价格：\t{}\n简称历史：\t{}",
+                let sina = Sina::default();
+
+                println!("{}", "基本信息".bold());
+                match sina.profile(code).await {
+                    Ok(profile) => println!("证券代码：\t{}\n公司名称：\t{}\n主营业务：\t{}\n公司网址：\t{}\n办公地址：\t{}\n上市日期：\t{}\n发行价格：\t{}\n简称历史：\t{}\n",
                                  symbol,
                                  profile.name,
                                  profile.business,
@@ -50,23 +59,51 @@ async fn run() -> Result<()> {
                                  profile.listing_date,
                                  profile.listing_price,
                                  profile.used_name,
-                        );
-                    }
+                        ),
                     Err(err) => eprintln!("{}", err),
                 }
 
-                // todo other info
+                // todo
+                if all || financials {
+                    println!("{}", "财务指标".bold());
+                    tokio::spawn(async move {
+                        match sina.financials(&symbol).await {
+                            Ok(financials) => {
+                                println!("{:?}", financials);
+                            }
+                            Err(err) => eprintln!("{}", err),
+                        }
+                    });
+                }
+
+                if all || structure {
+                    println!("{}", "股东结构".bold());
+                }
+
+                if all || dividends {
+                    println!("{}", "分红送配".bold());
+                }
+
+                if all || presses {
+                    println!("{}", "最新公告".bold());
+                }
             }
             Err(err) => eprintln!("{}", err),
         },
-        Subcommand::Quote { symbol, realtime } => match check_symbol(&symbol) {
+        Subcommand::Quote { symbol, realtime, multiline } => match check_symbol(&symbol) {
             Ok(symbol) => {
                 if realtime {
-                    Sina::default()
-                        .quote_ws(&symbol, |quote: Quote| {
+                    Sina::quote_ws(&symbol, |quote: Quote| {
+                        if !multiline {
+                            let mut stdout = stdout();
                             write_quote(&quote);
-                        })
-                        .await;
+                            stdout.execute(cursor::MoveToPreviousLine(1)).unwrap();
+                            stdout.flush().unwrap();
+                        } else {
+                            write_quote(&quote);
+                        }
+                    })
+                    .await;
                 } else {
                     match Sina::default().quote(&symbol).await {
                         Ok(quote) => {
@@ -105,7 +142,7 @@ fn write_quote(quote: &Quote) {
     let now = quote.now.parse::<f64>().unwrap();
     let close = quote.close.parse::<f64>().unwrap();
     let rate = (now / close - 1.0) * 100.0;
-    let now = format!("￥{:.2} {:.2}%", now, rate);
+    let now = format!("{:.2} {:.2}%", now, rate);
     println!(
         "{} {}  {}\t昨收：{:.2}\t今开：{:.2}\t最高：{:.2}\t最低：{:.2}\t成交量：{}手\t成交额：{}元\t{}",
         quote.date,

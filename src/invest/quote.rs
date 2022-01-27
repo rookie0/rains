@@ -1,15 +1,25 @@
+/// 行情报价
 #[derive(Debug, Default)]
 pub struct Quote {
     pub symbol: String,
     pub name: String,
+    /// 当前价
     pub now: String,
+    /// 昨收
     pub close: String,
+    /// 今开
     pub open: String,
+    /// 最高
     pub high: String,
+    /// 最低
     pub low: String,
+    /// 竞买价
     pub buy: String,
+    /// 竞卖价
     pub sell: String,
+    /// 成交量
     pub turnover: String,
+    /// 成交额
     pub volume: String,
     pub date: String,
     pub time: String,
