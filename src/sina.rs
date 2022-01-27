@@ -15,9 +15,13 @@ use tokio::{select, time::interval};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::debug;
 
-use crate::invest::{quote::Quote, stock::Profile, Exchange, Investment, Market};
+use crate::invest::{
+    quote::Quote,
+    stock::{Financial, Profile},
+    Exchange, Investment, Market,
+};
 
-const SOURCE: &str = "https://finance.sina.com.cn";
+const PORTAL: &str = "https://finance.sina.com.cn";
 
 #[derive(Debug)]
 pub struct Sina {
@@ -27,7 +31,7 @@ pub struct Sina {
 impl Default for Sina {
     fn default() -> Self {
         let mut headers = HeaderMap::new();
-        headers.insert(header::REFERER, HeaderValue::from_static(SOURCE));
+        headers.insert(header::REFERER, HeaderValue::from_static(PORTAL));
         let client = Client::builder().default_headers(headers).timeout(Duration::from_secs(5)).build().unwrap();
         Sina { client }
     }
@@ -131,6 +135,24 @@ impl Sina {
         }
     }
 
+    pub async fn financials(&self, code: &str) -> Result<Vec<Financial>> {
+        match self
+            .request(&format!(
+                "https://money.finance.sina.com.cn/corp/go.php/vFD_FinanceSummary/stockid/{}.phtml",
+                code
+            ))
+            .await
+        {
+            Ok(content) => {
+                let doc = Html::parse_document(&content);
+                // todo
+
+                Ok(Vec::new())
+            }
+            Err(err) => bail!(err),
+        }
+    }
+
     pub async fn quote(&self, symbol: &str) -> Result<Quote> {
         match self.request(&format!("https://hq.sinajs.cn/list={}", symbol.to_lowercase())).await {
             Ok(content) => {
@@ -150,23 +172,23 @@ impl Sina {
     async fn request(&self, url: &str) -> Result<String> {
         match self.client.get(url).send().await {
             Ok(resp) => {
-                let status = &resp.status();
-                let content = &resp.text().await.unwrap();
-                if status != &StatusCode::OK {
+                let status = resp.status();
+                let content = resp.text().await.unwrap();
+                if status != StatusCode::OK {
                     bail!("request return error, http code: {}, content: {}", status, &content)
                 }
 
-                Ok(content.to_string())
+                Ok(content)
             }
             Err(err) => bail!("request failed, {}", err),
         }
     }
 
-    pub async fn quote_ws(&self, symbol: &str, handler: impl Fn(Quote)) {
+    pub async fn quote_ws(symbol: &str, handler: impl Fn(Quote)) {
         let req = Request::builder()
             .method(Method::GET)
             .uri(format!("wss://hq.sinajs.cn/wskt?list={}", symbol.to_lowercase()))
-            .header(header::ORIGIN, HeaderValue::from_static(SOURCE))
+            .header(header::ORIGIN, HeaderValue::from_static(PORTAL))
             .body(())
             .unwrap();
 
