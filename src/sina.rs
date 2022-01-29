@@ -1,6 +1,6 @@
 // todo source provider
 
-use std::{str::FromStr, time::Duration};
+use std::{f64, str::FromStr, time::Duration};
 
 use anyhow::{bail, Result};
 use futures_util::{SinkExt, StreamExt};
@@ -10,10 +10,10 @@ use reqwest::{
     header::{self, HeaderMap, HeaderValue},
     Client, StatusCode,
 };
-use scraper::{Html, Selector};
-use tokio::{select, time::interval};
+use scraper::{Html, Node, Selector};
+use tokio::{join, select, time::interval};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::invest::{
     quote::Quote,
@@ -32,7 +32,7 @@ impl Default for Sina {
     fn default() -> Self {
         let mut headers = HeaderMap::new();
         headers.insert(header::REFERER, HeaderValue::from_static(PORTAL));
-        let client = Client::builder().default_headers(headers).timeout(Duration::from_secs(5)).build().unwrap();
+        let client = Client::builder().default_headers(headers).timeout(Duration::from_secs(10)).build().unwrap();
         Sina { client }
     }
 }
@@ -106,21 +106,23 @@ impl Sina {
         }
     }
 
-    pub async fn profile(&self, code: &str) -> Result<Profile> {
-        match self
-            .request(&format!("https://vip.stock.finance.sina.com.cn/corp/go.php/vCI_CorpInfo/stockid/{}.phtml", code))
-            .await
-        {
+    pub async fn profile(&self, symbol: &str) -> Result<Profile> {
+        let corp_url =
+            format!("https://vip.stock.finance.sina.com.cn/corp/go.php/vCI_CorpInfo/stockid/{}.phtml", &symbol[2..]);
+        let info_url = format!("https://hq.sinajs.cn/list={},{}_i", symbol.to_lowercase(), symbol.to_lowercase());
+        let (corp, info) = join!(self.request(&corp_url), self.request(&info_url));
+
+        let mut profile = Profile::default();
+        match corp {
             Ok(content) => {
                 let doc = Html::parse_document(&content);
                 let tds = Selector::parse("#comInfo1 td").unwrap();
                 let a = Selector::parse("a").unwrap();
-                let mut profile = Profile::default();
-                for (i, td) in doc.select(&tds).into_iter().enumerate() {
+                for (i, td) in doc.select(&tds).enumerate() {
                     match i {
                         1 => profile.name = td.inner_html().trim().to_string(),
                         7 => profile.listing_date = td.select(&a).next().unwrap().inner_html().trim().to_string(),
-                        9 => profile.listing_price = td.inner_html().trim().to_string(),
+                        9 => profile.listing_price = td.inner_html().trim().parse::<f64>().unwrap_or(0.0),
                         35 => profile.website = td.select(&a).next().unwrap().inner_html().trim().to_string(),
                         41 => profile.used_name = td.inner_html().trim().to_string(),
                         45 => profile.business_address = td.inner_html().trim().to_string(),
@@ -128,13 +130,45 @@ impl Sina {
                         _ => {}
                     }
                 }
-
-                Ok(profile)
             }
-            Err(err) => bail!(err),
+            Err(err) => error!("get corp failed, {}", err),
         }
+
+        match info {
+            Ok(content) => {
+                for (i, caps) in Regex::new("\"(.*)\"").unwrap().captures_iter(&content).enumerate() {
+                    match i {
+                        0 => {
+                            let quote = quote_from_str(caps.get(1).unwrap().as_str());
+                            profile.price = quote.now;
+                            if profile.used_name.is_empty() {
+                                profile.used_name = quote.name;
+                            }
+                        }
+                        1 => {
+                            // A,zgpa,8.1000,6.6573,4.6300,43.3277,2859.1461,1828024.141,1083266.4498,1083266.4498,0,CNY,1430.9900,1216.9600,33.8000,1,10.5000,9046.2900,816.3800,88.280,47.300,0.1,中国平安,X|O|0|0|0,55.87|45.71,20210930|27212666666.67,637.4600|81.8240,|,,1/1,EQA,,1.61,50.41|50.41|53.55,保险Ⅱ
+                            let info = caps.get(1).unwrap().as_str().split(',').collect::<Vec<&str>>();
+                            let eps = info.get(5).unwrap_or(&"").parse::<f64>().unwrap_or(0.0);
+                            let cap = info.get(7).unwrap_or(&"").parse::<f64>().unwrap_or(0.0);
+                            let traded_cap = info.get(8).unwrap_or(&"").parse::<f64>().unwrap_or(0.0);
+
+                            profile.pb = profile.price / eps;
+                            profile.category = info.get(34).unwrap_or(&"").to_string();
+                            profile.market_cap = profile.price * cap * 10000.0;
+                            profile.traded_market_cap = profile.price * traded_cap * 10000.0;
+                            // todo calc profile.pe_ttm
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Err(err) => error!("get info failed, {}", err),
+        }
+
+        Ok(profile)
     }
 
+    // todo complete info
     pub async fn financials(&self, code: &str) -> Result<Vec<Financial>> {
         match self
             .request(&format!(
@@ -145,11 +179,53 @@ impl Sina {
         {
             Ok(content) => {
                 let doc = Html::parse_document(&content);
-                // todo
+                let tds = Selector::parse("#FundHoldSharesTable tr td:last-child").unwrap();
+                let val = Selector::parse("strong,a").unwrap();
+                let mut results = Vec::new();
+                let mut financials = Vec::new();
+                let mut f = Financial::default();
+                let to_num = |s: &str| s.replace(',', "").replace('元', "").parse::<f64>().unwrap_or(0.0);
+                for (i, td) in doc.select(&tds).enumerate() {
+                    let val = match td.first_child() {
+                        Some(node) => match node.value() {
+                            Node::Text(txt) => txt.text.to_string(),
+                            Node::Element(_) => td.select(&val).next().unwrap().inner_html(),
+                            _ => "".to_string(),
+                        },
+                        None => "".to_string(),
+                    };
 
-                Ok(Vec::new())
+                    match i {
+                        _ if i % 12 == 0 => {
+                            if i > 0 {
+                                financials.push(f);
+                                f = Financial::default();
+                            }
+                            f.date = val;
+                        }
+                        _ if i % 12 == 1 => f.ps_net_assets = to_num(&val),
+                        _ if i % 12 == 3 => f.ps_capital_reserve = to_num(&val),
+                        _ if i % 12 == 8 => f.total_revenue = to_num(&val),
+                        _ if i % 12 == 10 => f.net_profit = to_num(&val),
+                        _ if i > 95 => break, // 取最近8季度
+                        _ => {}
+                    }
+                }
+
+                for i in 0..4 {
+                    if let Some(cur) = financials.get(i) {
+                        let mut f = cur.clone();
+                        if let Some(prev) = financials.get(i + 4) {
+                            f.total_revenue_rate = (f.total_revenue - prev.total_revenue) / prev.total_revenue * 100.0;
+                            f.net_profit_rate = (f.net_profit - prev.net_profit) / prev.net_profit * 100.0;
+                        }
+                        results.push(f);
+                    }
+                }
+
+                Ok(results)
             }
-            Err(err) => bail!(err),
+            Err(err) => bail!("err {}", err),
         }
     }
 
@@ -157,7 +233,7 @@ impl Sina {
         match self.request(&format!("https://hq.sinajs.cn/list={}", symbol.to_lowercase())).await {
             Ok(content) => {
                 if let Some(caps) = Regex::new("\"(.*)\"").unwrap().captures(&content) {
-                    let mut quote = Quote::from(caps.get(1).unwrap().as_str());
+                    let mut quote = quote_from_str(caps.get(1).unwrap().as_str());
                     quote.symbol = symbol.to_string();
 
                     return Ok(quote);
@@ -204,7 +280,7 @@ impl Sina {
                         if msg.is_text() {
                             debug!("ws receive msg: {}", msg);
                             if let Some(caps) = Regex::new("=(.*)\\n").unwrap().captures(&msg.to_string()) {
-                                let mut quote = Quote::from(caps.get(1).unwrap().as_str());
+                                let mut quote = quote_from_str(caps.get(1).unwrap().as_str());
                                 quote.symbol = symbol.to_string();
                                 handler(quote);
                             }
@@ -216,5 +292,25 @@ impl Sina {
                 }
             }
         }
+    }
+}
+
+// 中国平安,51.020,50.790,49.970,51.350,49.800,49.970,49.980,72935539,3688023391.000,155984,49.970,125200,49.960,95800,49.950,48800,49.940,32300,49.930,174297,49.980,10800,49.990,86300,50.000,3100,50.010,53700,50.020,2022-01-28,15:00:00,00,
+fn quote_from_str(str: &str) -> Quote {
+    let values: Vec<&str> = str.split(',').collect::<Vec<&str>>();
+    Quote {
+        symbol: "".to_string(),
+        name: values.get(0).unwrap_or(&"").to_string(),
+        now: values.get(3).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
+        close: values.get(2).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
+        open: values.get(1).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
+        high: values.get(4).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
+        low: values.get(5).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
+        buy: values.get(6).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
+        sell: values.get(7).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
+        turnover: values.get(8).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
+        volume: values.get(9).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
+        date: values.get(30).unwrap_or(&"").to_string(),
+        time: values.get(31).unwrap_or(&"").to_string(),
     }
 }
