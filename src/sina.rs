@@ -10,14 +10,14 @@ use reqwest::{
     header::{self, HeaderMap, HeaderValue},
     Client, StatusCode,
 };
-use scraper::{Html, Node, Selector};
+use scraper::{ElementRef, Html, Node, Selector};
 use tokio::{join, select, time::interval};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error};
 
 use crate::invest::{
     quote::Quote,
-    stock::{Dividend, Financial, Profile},
+    stock::{Dividend, Financial, Holder, Press, Profile, Structure},
     Exchange, Investment, Market,
 };
 
@@ -230,10 +230,83 @@ impl Sina {
         }
     }
 
+    pub async fn structures(&self, code: &str) -> Result<Vec<Structure>> {
+        match self
+            .request(&format!(
+                "https://vip.stock.finance.sina.com.cn/corp/go.php/vCI_StockHolder/stockid/{}.phtml",
+                code
+            ))
+            .await
+        {
+            Ok(content) => {
+                let doc = Html::parse_document(&content);
+                let trs = Selector::parse("#Table1 tbody tr").unwrap();
+                let td1 = Selector::parse("td:last-child").unwrap();
+                let td2 = Selector::parse("td div").unwrap();
+                let mut structures = Vec::new();
+                let mut s = Structure::default();
+                let get_link_val = |er: ElementRef| -> String {
+                    let a = Selector::parse("a").unwrap();
+                    match er.first_child().unwrap().value() {
+                        Node::Text(txt) => txt.text.to_string(),
+                        Node::Element(_) => er.select(&a).next().unwrap().inner_html(),
+                        _ => "".to_string(),
+                    }
+                };
+                for (i, tr) in doc.select(&trs).enumerate() {
+                    let val = tr.select(&td1).next().unwrap().inner_html();
+
+                    match i {
+                        _ if i % 17 == 0 => {
+                            if i > 0 {
+                                structures.push(s);
+                                s = Structure::default();
+                            }
+                            s.date = val;
+                        }
+                        _ if i % 17 == 3 => s.holders_num = num_from_str(&val),
+                        _ if i % 17 == 4 => s.shares_avg = num_from_str(&val),
+                        _ if i % 17 == 6
+                            || i % 17 == 7
+                            || i % 17 == 8
+                            || i % 17 == 9
+                            || i % 17 == 10
+                            || i % 17 == 11
+                            || i % 17 == 12
+                            || i % 17 == 13
+                            || i % 17 == 14
+                            || i % 17 == 15 =>
+                        {
+                            let mut h = Holder::default();
+                            for (m, td) in tr.select(&td2).enumerate() {
+                                match m {
+                                    1 => h.name = get_link_val(td),
+                                    2 => h.shares = get_link_val(td).parse::<f64>().unwrap_or(0.0),
+                                    3 => h.percent = get_link_val(td).parse::<f64>().unwrap_or(0.0),
+                                    4 => h.shares_type = get_link_val(td),
+                                    _ => {}
+                                }
+                            }
+                            s.holders_ten.push(h);
+                        }
+                        _ => {}
+                    }
+
+                    if i > 68 {
+                        break;
+                    }
+                }
+
+                Ok(structures)
+            }
+            Err(err) => bail!("get presses failed, {}", err),
+        }
+    }
+
     pub async fn dividends(&self, code: &str) -> Result<Vec<Dividend>> {
         match self
             .request(&format!(
-                "http://vip.stock.finance.sina.com.cn/corp/go.php/vISSUE_ShareBonus/stockid/{}.phtml",
+                "https://vip.stock.finance.sina.com.cn/corp/go.php/vISSUE_ShareBonus/stockid/{}.phtml",
                 code
             ))
             .await
@@ -265,6 +338,46 @@ impl Sina {
                 Ok(dividends)
             }
             Err(err) => bail!("get dividends failed, {}", err),
+        }
+    }
+
+    pub async fn presses(&self, code: &str) -> Result<Vec<Press>> {
+        match self
+            .request(&format!(
+                "https://vip.stock.finance.sina.com.cn/corp/go.php/vCB_AllBulletin/stockid/{}.phtml",
+                code
+            ))
+            .await
+        {
+            Ok(content) => {
+                let doc = Html::parse_document(&content);
+                let ul = Selector::parse("div.datelist ul").unwrap();
+                let mut presses = Vec::new();
+                let mut p = Press::default();
+                if let Some(ele) = doc.select(&ul).next() {
+                    for (i, item) in ele.children().enumerate() {
+                        match i {
+                            _ if i % 3 == 0 => {
+                                if i > 0 {
+                                    presses.push(p);
+                                    p = Press::default();
+                                }
+                                p.date = item.value().as_text().unwrap().trim().to_string();
+                            }
+                            _ if i % 3 == 1 => {
+                                let ele = item.value().as_element().unwrap();
+                                p.url = format!("https://vip.stock.finance.sina.com.cn/{}", ele.attr("href").unwrap());
+                                let txt = item.children().next().unwrap().value().as_text().unwrap();
+                                p.title = txt.text.to_string();
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                Ok(presses)
+            }
+            Err(err) => bail!("get presses failed, {}", err),
         }
     }
 
@@ -351,5 +464,12 @@ fn quote_from_str(str: &str) -> Quote {
         volume: values.get(9).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
         date: values.get(30).unwrap_or(&"").to_string(),
         time: values.get(31).unwrap_or(&"").to_string(),
+    }
+}
+
+fn num_from_str(str: &str) -> f64 {
+    match Regex::new(r"\d+").unwrap().captures(str) {
+        Some(caps) => caps.get(0).unwrap().as_str().parse::<f64>().unwrap_or(0.0),
+        None => 0.0,
     }
 }

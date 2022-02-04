@@ -109,6 +109,34 @@ async fn run() -> Result<()> {
 
                 if all || structure {
                     println!("\n{}", "股东结构".bold());
+                    let symbol = symbol.clone();
+                    tokio::spawn(async move {
+                        match SINA.lock().await.structures(&symbol[2..]).await {
+                            Ok(structures) => {
+                                if structures.is_empty() {
+                                    return;
+                                }
+
+                                let first = structures.get(0).unwrap();
+                                let mut holders = String::new();
+                                let mut shares = String::new();
+                                for s in structures.iter() {
+                                    holders.push_str(&format!("{}({})\t", fmt_num(&s.holders_num), s.date));
+                                    shares.push_str(&format!("{}({})\t", fmt_num(&s.shares_avg), s.date));
+                                }
+                                println!(
+                                    "截止日期\t{}\n股东户数\t{}\n平均持股\t{}\n十大股东",
+                                    first.date, holders, shares
+                                );
+                                for (i, h) in first.holders_ten.iter().enumerate() {
+                                    println!("{}\t{}({}% {})", i + 1, h.name, h.percent, fmt_num(&h.shares))
+                                }
+                            }
+                            Err(err) => error!("{}", err),
+                        }
+                    })
+                    .await
+                    .unwrap()
                 }
 
                 if all || dividends {
@@ -150,6 +178,19 @@ async fn run() -> Result<()> {
 
                 if all || presses {
                     println!("\n{}", "最新公告".bold());
+                    let symbol = symbol.clone();
+                    tokio::spawn(async move {
+                        match SINA.lock().await.presses(&symbol[2..]).await {
+                            Ok(presses) => {
+                                for p in presses.iter() {
+                                    println!("{}\t{}\t{}", p.date, p.title, p.url);
+                                }
+                            }
+                            Err(err) => error!("{}", err),
+                        }
+                    })
+                    .await
+                    .unwrap();
                 }
             }
             Err(err) => error!("{}", err),
