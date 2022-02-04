@@ -10,7 +10,7 @@ pub struct Stock {
     /// 财务指标
     pub financials: Vec<Financial>,
     /// 股东结构
-    pub structure: Vec<Structure>,
+    pub structures: Vec<Structure>,
     /// 分红送配
     pub dividends: Vec<Dividend>,
     /// 最新公告
