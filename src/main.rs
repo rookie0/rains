@@ -2,6 +2,7 @@ use std::io::{stdout, Write};
 
 use anyhow::{bail, Result};
 use crossterm::{cursor, style::Stylize, ExecutableCommand};
+use once_cell::sync::Lazy;
 use owo_colors::OwoColorize;
 use rains::{
     cli::{Opts, Subcommand},
@@ -9,8 +10,11 @@ use rains::{
     sina::Sina,
 };
 use regex::Regex;
+use tokio::sync::Mutex;
 use tracing::{debug, error};
 use tracing_subscriber::EnvFilter;
+
+static SINA: Lazy<Mutex<Sina>> = Lazy::new(|| Mutex::new(Sina::default()));
 
 #[tokio::main]
 async fn main() {
@@ -45,13 +49,11 @@ async fn run() -> Result<()> {
         },
         Subcommand::Info { symbol, all, financials, structure, dividends, presses } => match check_symbol(&symbol) {
             Ok(symbol) => {
-                let sina = Sina::default();
-
                 println!("{}", "基本信息".bold());
-                match sina.profile(&symbol).await {
+                match SINA.lock().await.profile(&symbol).await {
                     Ok(profile) => println!(
                         "证券代码\t{}\n简称历史\t{}\n公司名称\t{}\n上市日期\t{}\n发行价格\t{:.2}\n行业分类\t{}\n主营业务\t{}\n办公地址\t{}\n公司网址\t{}\n当前价格\t{:.2}\n市净率PB\t{:.2}\n市盈率TTM\t{}\n总市值  \t{}\n流通市值\t{}",
-                        symbol,
+                        &symbol,
                         profile.used_name,
                         profile.name,
                         profile.listing_date,
@@ -71,8 +73,9 @@ async fn run() -> Result<()> {
 
                 if all || financials {
                     println!("\n{}", "财务指标".bold());
+                    let symbol = symbol.clone();
                     tokio::spawn(async move {
-                        match sina.financials(&symbol[2..]).await {
+                        match SINA.lock().await.financials(&symbol[2..]).await {
                             Ok(financials) => {
                                 // align todo change
                                 let cols = vec![
@@ -110,6 +113,39 @@ async fn run() -> Result<()> {
 
                 if all || dividends {
                     println!("\n{}", "分红送配".bold());
+                    let symbol = symbol.clone();
+                    tokio::spawn(async move {
+                        match SINA.lock().await.dividends(&symbol[2..]).await {
+                            Ok(dividends) => {
+                                println!("公告日期 \t 分红送配 \t\t\t 除权除息日 \t 股权登记日");
+                                for d in dividends.iter() {
+                                    let mut info = String::from("10");
+                                    if d.shares_dividend > 0.0 {
+                                        info.push_str(&format!("送{}股", d.shares_dividend));
+                                    }
+                                    if d.shares_into > 0.0 {
+                                        info.push_str(&format!("转{}股", d.shares_into));
+                                    }
+                                    if d.money > 0.0 {
+                                        info.push_str(&format!("派{}元", d.money));
+                                    }
+                                    if info.len() < 3 {
+                                        info = String::from("不分配\t");
+                                    }
+                                    println!(
+                                        "{} \t {} \t\t {} \t {}",
+                                        d.date,
+                                        if info.len() < 19 { format!("{}\t", info) } else { info },
+                                        if d.date_dividend.len() < 3 { " -\t" } else { &d.date_dividend },
+                                        if d.date_record.len() < 3 { " - " } else { &d.date_record }
+                                    );
+                                }
+                            }
+                            Err(err) => error!("{}", err),
+                        }
+                    })
+                    .await
+                    .unwrap()
                 }
 
                 if all || presses {
