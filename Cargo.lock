@@ -986,6 +986,7 @@ dependencies = [
  "crossterm",
  "futures-util",
  "http",
+ "once_cell",
  "owo-colors",
  "regex",
  "reqwest",

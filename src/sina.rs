@@ -17,7 +17,7 @@ use tracing::{debug, error};
 
 use crate::invest::{
     quote::Quote,
-    stock::{Financial, Profile},
+    stock::{Dividend, Financial, Profile},
     Exchange, Investment, Market,
 };
 
@@ -153,6 +153,7 @@ impl Sina {
                             let traded_cap = info.get(8).unwrap_or(&"").parse::<f64>().unwrap_or(0.0);
 
                             profile.pb = profile.price / eps;
+                            profile.pb = if profile.pb.is_nan() { 0.0 } else { profile.pb };
                             profile.category = info.get(34).unwrap_or(&"").to_string();
                             profile.market_cap = profile.price * cap * 10000.0;
                             profile.traded_market_cap = profile.price * traded_cap * 10000.0;
@@ -225,7 +226,45 @@ impl Sina {
 
                 Ok(results)
             }
-            Err(err) => bail!("err {}", err),
+            Err(err) => bail!("get financials failed, {}", err),
+        }
+    }
+
+    pub async fn dividends(&self, code: &str) -> Result<Vec<Dividend>> {
+        match self
+            .request(&format!(
+                "http://vip.stock.finance.sina.com.cn/corp/go.php/vISSUE_ShareBonus/stockid/{}.phtml",
+                code
+            ))
+            .await
+        {
+            Ok(content) => {
+                let doc = Html::parse_document(&content);
+                let tds = Selector::parse("#sharebonus_1 tr td").unwrap();
+                let mut dividends = Vec::new();
+                let mut d = Dividend::default();
+                for (i, td) in doc.select(&tds).enumerate() {
+                    let val = td.inner_html();
+                    match i {
+                        _ if i % 9 == 0 => {
+                            if i > 0 {
+                                dividends.push(d);
+                                d = Dividend::default();
+                            }
+                            d.date = val;
+                        }
+                        _ if i % 9 == 1 => d.shares_dividend = val.parse::<f64>().unwrap_or(0.0),
+                        _ if i % 9 == 2 => d.shares_into = val.parse::<f64>().unwrap_or(0.0),
+                        _ if i % 9 == 3 => d.money = val.parse::<f64>().unwrap_or(0.0),
+                        _ if i % 9 == 5 => d.date_dividend = val,
+                        _ if i % 9 == 6 => d.date_record = val,
+                        _ => {}
+                    }
+                }
+
+                Ok(dividends)
+            }
+            Err(err) => bail!("get dividends failed, {}", err),
         }
     }
 
