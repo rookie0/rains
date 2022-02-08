@@ -2,8 +2,11 @@
 authors = ["Y"]
 description = "💹 命令行 A 股沪深北证股票信息行情数据查询工具"
 edition = "2021"
+homepage = "https://github.com/rookie0/rains"
 license = "MIT"
 name = "rains"
+readme = "README.md"
+repository = "https://github.com/rookie0/rains"
 version = "0.1.0"
 
 [dependencies]
@@ -20,7 +23,7 @@ reqwest = "0.11"
 scraper = "0.12"
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
-tokio-tungstenite = { version = "*", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.16", features = ["native-tls"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
