@@ -13,20 +13,20 @@ pub struct Opts {
 
 #[derive(Debug, Eq, PartialEq, Parser)]
 pub enum Subcommand {
-    /// 搜索 拼音/代码/名称 eg: zgpa
+    /// 搜索股票
     #[clap(alias = "s")]
     Search {
-        /// 拼音/代码/名称
+        /// 拼音/代码/名称 eg: zgpa
         #[clap(required = true)]
         query: String,
-        /// 条数 默认10条
+        /// 展示条数
         #[clap(short, long, default_value_t = 10)]
         limit: u8,
     },
-    /// 公司信息 eg: SH601318
+    /// 股票信息
     #[clap(alias = "i")]
     Info {
-        /// 证券代码
+        /// 证券代码 eg: SH601318
         #[clap(required = true)]
         symbol: String,
         /// 全部信息
@@ -45,10 +45,10 @@ pub enum Subcommand {
         #[clap(short, long)]
         presses: bool,
     },
-    /// 行情报价 eg: SH601318
+    /// 行情报价
     #[clap(alias = "q")]
     Quote {
-        /// 证券代码
+        /// 证券代码 eg: SH601318
         #[clap(required = true)]
         symbol: String,
         /// 实时行情
