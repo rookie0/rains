@@ -1,6 +1,10 @@
-name: ci
+name: CI
 
-on: [ push, pull_request ]
+on:
+  pull_request:
+  push:
+    branches:
+      - main
 
 jobs:
   build:
@@ -11,21 +15,34 @@ jobs:
         include:
           - target: x86_64-apple-darwin
             os: macos-latest
+            args: --best
+            strip: true
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             ext: .exe
+            args: -9
+            strip: false
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            args: --best --lzma
+            strip: true
 
     steps:
       - name: Checkout
         uses: actions/checkout@v2
 
-      - name: Release
+      - name: Build
         run: |
           rustup toolchain install nightly --profile minimal -t ${{ matrix.target }}
           cargo +nightly test --target ${{ matrix.target }}
           cargo +nightly build --release --target ${{ matrix.target }}
+
+      - name: Compress bianry
+        uses: svenstaro/upx-action@v2
+        with:
+          file: target/${{ matrix.target }}/release/rains${{ matrix.ext }}
+          args: ${{ matrix.args }}
+          strip: ${{ matrix.strip }}
 
       - name: Upload bianry
         uses: actions/upload-artifact@v2
