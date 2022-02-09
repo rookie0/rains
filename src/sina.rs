@@ -53,11 +53,17 @@ impl Sina {
             .await
         {
             Ok(content) => {
+                debug!("search result: {}", content);
                 if let Some(caps) = Regex::new("\"(.*)\"").unwrap().captures(&content) {
                     // 腾讯控股,31,00700,00700,腾讯控股,,腾讯控股,99,1,ESG;
                     // 1 5 7名称 2市场 3 4代码 8- 9在市 10-
+                    let matched = caps.get(1).unwrap().as_str();
+                    if matched.is_empty() {
+                        return Ok(Vec::new());
+                    }
+
                     let mut values = Vec::new();
-                    let pieces = caps.get(1).unwrap().as_str().split(';').collect::<Vec<&str>>();
+                    let pieces = matched.split(';').collect::<Vec<&str>>();
                     for p in pieces.iter() {
                         values.push(p.split(',').collect::<Vec<&str>>());
                     }
@@ -453,15 +459,15 @@ fn quote_from_str(str: &str) -> Quote {
     Quote {
         symbol: "".to_string(),
         name: values.get(0).unwrap_or(&"").to_string(),
-        now: values.get(3).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
-        close: values.get(2).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
-        open: values.get(1).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
-        high: values.get(4).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
-        low: values.get(5).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
-        buy: values.get(6).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
-        sell: values.get(7).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
-        turnover: values.get(8).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
-        volume: values.get(9).unwrap_or(&"").parse::<f64>().unwrap_or(0.0),
+        now: values.get(3).unwrap_or(&"").parse().unwrap_or(0.0),
+        close: values.get(2).unwrap_or(&"").parse().unwrap_or(0.0),
+        open: values.get(1).unwrap_or(&"").parse().unwrap_or(0.0),
+        high: values.get(4).unwrap_or(&"").parse().unwrap_or(0.0),
+        low: values.get(5).unwrap_or(&"").parse().unwrap_or(0.0),
+        buy: values.get(6).unwrap_or(&"").parse().unwrap_or(0.0),
+        sell: values.get(7).unwrap_or(&"").parse().unwrap_or(0.0),
+        turnover: values.get(8).unwrap_or(&"").parse().unwrap_or(0.0),
+        volume: values.get(9).unwrap_or(&"").parse().unwrap_or(0.0),
         date: values.get(30).unwrap_or(&"").to_string(),
         time: values.get(31).unwrap_or(&"").to_string(),
     }
