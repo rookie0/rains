@@ -31,6 +31,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
 
+      - uses: Swatinem/rust-cache@v1
+
       - name: Build
         run: |
           rustup toolchain install nightly --profile minimal -t ${{ matrix.target }}
@@ -56,6 +58,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
+
+      - uses: Swatinem/rust-cache@v1
 
       - name: Clippy fmt
         run: |
