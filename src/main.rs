@@ -47,12 +47,13 @@ async fn run() -> Result<()> {
             }
             Err(err) => error!("{}", err),
         },
-        Subcommand::Info { symbol, all, financials, structure, dividends, presses } => match check_symbol(&symbol) {
-            Ok(symbol) => {
-                println!("{}", "基本信息".bold());
-                match SINA.lock().await.profile(&symbol).await {
+        Subcommand::Info { symbol, all, financials, structure, dividends, presses } => {
+            match check_symbol(&symbol).await {
+                Ok(symbol) => {
+                    match SINA.lock().await.profile(&symbol).await {
                     Ok(profile) => println!(
-                        "证券代码\t{}\n简称历史\t{}\n公司名称\t{}\n上市日期\t{}\n发行价格\t{:.2}\n行业分类\t{}\n主营业务\t{}\n办公地址\t{}\n公司网址\t{}\n当前价格\t{:.2}\n市净率PB\t{:.2}\n市盈率TTM\t{}\n总市值  \t{}\n流通市值\t{}",
+                        "{}\n证券代码\t{}\n简称历史\t{}\n公司名称\t{}\n上市日期\t{}\n发行价格\t{:.2}\n行业分类\t{}\n主营业务\t{}\n办公地址\t{}\n公司网址\t{}\n当前价格\t{:.2}\n市净率PB\t{:.2}\n市盈率TTM\t{}\n总市值  \t{}\n流通市值\t{}",
+                        "基本信息".bold(),
                         &symbol,
                         profile.used_name,
                         profile.name,
@@ -71,131 +72,132 @@ async fn run() -> Result<()> {
                     Err(err) => error!("{}", err),
                 }
 
-                if all || financials {
-                    println!("\n{}", "财务指标".bold());
-                    let symbol = symbol.clone();
-                    tokio::spawn(async move {
-                        match SINA.lock().await.financials(&symbol[2..]).await {
-                            Ok(financials) => {
-                                // align todo change
-                                let cols = vec![
-                                    "截止日期     ",
-                                    "总营收       ",
-                                    "净利润       ",
-                                    "每股净资产    ",
-                                    "每股资本公积金",
-                                ];
-                                for (i, col) in cols.iter().enumerate() {
-                                    let mut output = String::from(*col);
-                                    for f in financials.iter() {
-                                        match i {
-                                            0 => output.push_str(&format!(" \t\t {}", f.date)),
-                                            1 => output.push_str(&format!(" \t\t {}", fmt_num(&f.total_revenue))),
-                                            2 => output.push_str(&format!(" \t\t {}", fmt_num(&f.net_profit))),
-                                            3 => output.push_str(&format!(" \t\t {:.4}", f.ps_net_assets)),
-                                            4 => output.push_str(&format!(" \t\t {:.4}", f.ps_capital_reserve)),
-                                            _ => {}
+                    if all || financials {
+                        println!("\n{}", "财务指标".bold());
+                        let symbol = symbol.clone();
+                        tokio::spawn(async move {
+                            match SINA.lock().await.financials(&symbol[2..]).await {
+                                Ok(financials) => {
+                                    // align todo change
+                                    let cols = vec![
+                                        "截止日期     ",
+                                        "总营收       ",
+                                        "净利润       ",
+                                        "每股净资产    ",
+                                        "每股资本公积金",
+                                    ];
+                                    for (i, col) in cols.iter().enumerate() {
+                                        let mut output = String::from(*col);
+                                        for f in financials.iter() {
+                                            match i {
+                                                0 => output.push_str(&format!(" \t\t {}", f.date)),
+                                                1 => output.push_str(&format!(" \t\t {}", fmt_num(&f.total_revenue))),
+                                                2 => output.push_str(&format!(" \t\t {}", fmt_num(&f.net_profit))),
+                                                3 => output.push_str(&format!(" \t\t {:.4}", f.ps_net_assets)),
+                                                4 => output.push_str(&format!(" \t\t {:.4}", f.ps_capital_reserve)),
+                                                _ => {}
+                                            }
                                         }
+                                        println!("{}", output);
                                     }
-                                    println!("{}", output);
                                 }
+                                Err(err) => error!("{}", err),
                             }
-                            Err(err) => error!("{}", err),
-                        }
-                    })
-                    .await
-                    .unwrap();
-                }
+                        })
+                        .await
+                        .unwrap();
+                    }
 
-                if all || structure {
-                    println!("\n{}", "股东结构".bold());
-                    let symbol = symbol.clone();
-                    tokio::spawn(async move {
-                        match SINA.lock().await.structures(&symbol[2..]).await {
-                            Ok(structures) => {
-                                if structures.is_empty() {
-                                    return;
-                                }
+                    if all || structure {
+                        println!("\n{}", "股东结构".bold());
+                        let symbol = symbol.clone();
+                        tokio::spawn(async move {
+                            match SINA.lock().await.structures(&symbol[2..]).await {
+                                Ok(structures) => {
+                                    if structures.is_empty() {
+                                        return;
+                                    }
 
-                                let first = structures.get(0).unwrap();
-                                let mut holders = String::new();
-                                let mut shares = String::new();
-                                for s in structures.iter() {
-                                    holders.push_str(&format!("{}({})\t", fmt_num(&s.holders_num), s.date));
-                                    shares.push_str(&format!("{}({})\t", fmt_num(&s.shares_avg), s.date));
-                                }
-                                println!(
-                                    "截止日期\t{}\n股东户数\t{}\n平均持股\t{}\n十大股东",
-                                    first.date, holders, shares
-                                );
-                                for (i, h) in first.holders_ten.iter().enumerate() {
-                                    println!("{}\t{}({}% {})", i + 1, h.name, h.percent, fmt_num(&h.shares))
-                                }
-                            }
-                            Err(err) => error!("{}", err),
-                        }
-                    })
-                    .await
-                    .unwrap()
-                }
-
-                if all || dividends {
-                    println!("\n{}", "分红送配".bold());
-                    let symbol = symbol.clone();
-                    tokio::spawn(async move {
-                        match SINA.lock().await.dividends(&symbol[2..]).await {
-                            Ok(dividends) => {
-                                println!("公告日期 \t 分红送配 \t\t\t 除权除息日 \t 股权登记日");
-                                for d in dividends.iter() {
-                                    let mut info = String::from("10");
-                                    if d.shares_dividend > 0.0 {
-                                        info.push_str(&format!("送{}股", d.shares_dividend));
-                                    }
-                                    if d.shares_into > 0.0 {
-                                        info.push_str(&format!("转{}股", d.shares_into));
-                                    }
-                                    if d.money > 0.0 {
-                                        info.push_str(&format!("派{}元", d.money));
-                                    }
-                                    if info.len() < 3 {
-                                        info = String::from("不分配\t");
+                                    let first = structures.get(0).unwrap();
+                                    let mut holders = String::new();
+                                    let mut shares = String::new();
+                                    for s in structures.iter() {
+                                        holders.push_str(&format!("{}({})\t", fmt_num(&s.holders_num), s.date));
+                                        shares.push_str(&format!("{}({})\t", fmt_num(&s.shares_avg), s.date));
                                     }
                                     println!(
-                                        "{} \t {} \t\t {} \t {}",
-                                        d.date,
-                                        if info.len() < 19 { format!("{}\t", info) } else { info },
-                                        if d.date_dividend.len() < 3 { " -\t" } else { &d.date_dividend },
-                                        if d.date_record.len() < 3 { " - " } else { &d.date_record }
+                                        "截止日期\t{}\n股东户数\t{}\n平均持股\t{}\n十大股东",
+                                        first.date, holders, shares
                                     );
+                                    for (i, h) in first.holders_ten.iter().enumerate() {
+                                        println!("{}\t{}({}% {})", i + 1, h.name, h.percent, fmt_num(&h.shares))
+                                    }
                                 }
+                                Err(err) => error!("{}", err),
                             }
-                            Err(err) => error!("{}", err),
-                        }
-                    })
-                    .await
-                    .unwrap()
-                }
+                        })
+                        .await
+                        .unwrap()
+                    }
 
-                if all || presses {
-                    println!("\n{}", "最新公告".bold());
-                    let symbol = symbol.clone();
-                    tokio::spawn(async move {
-                        match SINA.lock().await.presses(&symbol[2..]).await {
-                            Ok(presses) => {
-                                for p in presses.iter() {
-                                    println!("{}\t{}\t{}", p.date, p.title, p.url);
+                    if all || dividends {
+                        println!("\n{}", "分红送配".bold());
+                        let symbol = symbol.clone();
+                        tokio::spawn(async move {
+                            match SINA.lock().await.dividends(&symbol[2..]).await {
+                                Ok(dividends) => {
+                                    println!("公告日期 \t 分红送配 \t\t\t 除权除息日 \t 股权登记日");
+                                    for d in dividends.iter() {
+                                        let mut info = String::from("10");
+                                        if d.shares_dividend > 0.0 {
+                                            info.push_str(&format!("送{}股", d.shares_dividend));
+                                        }
+                                        if d.shares_into > 0.0 {
+                                            info.push_str(&format!("转{}股", d.shares_into));
+                                        }
+                                        if d.money > 0.0 {
+                                            info.push_str(&format!("派{}元", d.money));
+                                        }
+                                        if info.len() < 3 {
+                                            info = String::from("不分配\t");
+                                        }
+                                        println!(
+                                            "{} \t {} \t\t {} \t {}",
+                                            d.date,
+                                            if info.len() < 19 { format!("{}\t", info) } else { info },
+                                            if d.date_dividend.len() < 3 { " -\t" } else { &d.date_dividend },
+                                            if d.date_record.len() < 3 { " - " } else { &d.date_record }
+                                        );
+                                    }
                                 }
+                                Err(err) => error!("{}", err),
                             }
-                            Err(err) => error!("{}", err),
-                        }
-                    })
-                    .await
-                    .unwrap();
+                        })
+                        .await
+                        .unwrap()
+                    }
+
+                    if all || presses {
+                        println!("\n{}", "最新公告".bold());
+                        let symbol = symbol.clone();
+                        tokio::spawn(async move {
+                            match SINA.lock().await.presses(&symbol[2..]).await {
+                                Ok(presses) => {
+                                    for p in presses.iter() {
+                                        println!("{}\t{}\t{}", p.date, p.title, p.url);
+                                    }
+                                }
+                                Err(err) => error!("{}", err),
+                            }
+                        })
+                        .await
+                        .unwrap();
+                    }
                 }
+                Err(err) => error!("{}", err),
             }
-            Err(err) => error!("{}", err),
-        },
-        Subcommand::Quote { symbol, realtime, multiline } => match check_symbol(&symbol) {
+        }
+        Subcommand::Quote { symbol, realtime, multiline } => match check_symbol(&symbol).await {
             Ok(symbol) => {
                 if realtime {
                     Sina::quote_ws(&symbol, |quote: Quote| {
@@ -225,9 +227,17 @@ async fn run() -> Result<()> {
     Ok(())
 }
 
-fn check_symbol(symbol: &str) -> Result<String> {
+async fn check_symbol(symbol: &str) -> Result<String> {
     match Regex::new(r"^(SZ|SH|BJ)\d{6}").unwrap().captures(&symbol.to_uppercase()) {
-        Some(caps) if symbol.len() == 8 => Ok(caps.get(0).unwrap().as_str().to_uppercase()),
+        Some(_) if symbol.len() == 8 => match SINA.lock().await.search(symbol).await {
+            Ok(res) => {
+                if res.len() != 1 {
+                    bail!("代码错误")
+                }
+                Ok(symbol.to_uppercase())
+            }
+            Err(err) => bail!(err),
+        },
         _ => bail!("当前仅支持沪深及北证股票信息查询"),
     }
 }
