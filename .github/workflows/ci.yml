@@ -33,11 +33,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v1
 
+      - name: Install nightly toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          toolchain: nightly
+          profile: minimal
+          override: true
+
       - name: Build
-        run: |
-          rustup toolchain install nightly --profile minimal -t ${{ matrix.target }}
-          cargo +nightly test --target ${{ matrix.target }}
-          cargo +nightly build --release --target ${{ matrix.target }}
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --target ${{ matrix.target }}
 
       - name: Compress bianry
         uses: svenstaro/upx-action@v2
@@ -52,6 +60,32 @@ jobs:
           name: rains-${{ matrix.target }}${{ matrix.ext }}
           path: target/${{ matrix.target }}/release/rains${{ matrix.ext }}
 
+  build-musl:
+    runs-on: ubuntu-latest
+    container: clux/muslrust:stable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Build
+        run: |
+          ln -s /root/.cargo $HOME/.cargo
+          ln -s /root/.rustup $HOME/.rustup
+          cargo build --release
+
+      - name: Compress bianry
+        uses: svenstaro/upx-action@v2
+        with:
+          file: target/x86_64-unknown-linux-musl/release/rains
+          args: --best --lzma
+          strip: true
+
+      - name: Upload bianry
+        uses: actions/upload-artifact@v2
+        with:
+          name: rains-x86_64-unknown-linux-musl
+          path: target/x86_64-unknown-linux-musl/release/rains
+
   clippy-rustfmt:
     name: clippy-rustfmt
     runs-on: ubuntu-latest
@@ -61,8 +95,22 @@ jobs:
 
       - uses: Swatinem/rust-cache@v1
 
-      - name: Clippy fmt
-        run: |
-          rustup toolchain install nightly --profile minimal -c clippy rustfmt
-          cargo +nightly clippy -- -D warnings
-          cargo +nightly fmt -- --check
+      - name: Install nightly toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          profile: minimal
+          override: true
+          components: rustfmt, clippy
+
+      - name: Clippy
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: -- -D warnings
+
+      - name: Fmt
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: -- --check
