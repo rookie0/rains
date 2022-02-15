@@ -48,13 +48,16 @@ pub enum Subcommand {
     /// 行情报价
     #[clap(alias = "q")]
     Quote {
-        /// 证券代码 eg: SH601318
+        /// 证券代码 多个以 , 分隔 eg: SH601318,SZ000001
         #[clap(required = true)]
         symbol: String,
+        /// 不检测代码是否正确
+        #[clap(short, long)]
+        no_check: bool,
         /// 实时行情
         #[clap(short, long)]
         realtime: bool,
-        /// 实时行情多行展示 默认单行
+        /// 实时行情多行展示 仅单个时支持
         #[clap(short, long)]
         multiline: bool,
     },
