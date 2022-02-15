@@ -387,17 +387,19 @@ impl Sina {
         }
     }
 
-    pub async fn quote(&self, symbol: &str) -> Result<Quote> {
-        match self.request(&format!("https://hq.sinajs.cn/list={}", symbol.to_lowercase())).await {
+    /// symbols: sz000001,sh601318
+    pub async fn quotes(&self, symbols: &str) -> Result<Vec<Quote>> {
+        match self.request(&format!("https://hq.sinajs.cn/list={}", symbols.to_lowercase())).await {
             Ok(content) => {
-                if let Some(caps) = Regex::new("\"(.*)\"").unwrap().captures(&content) {
-                    let mut quote = quote_from_str(caps.get(1).unwrap().as_str());
-                    quote.symbol = symbol.to_string();
-
-                    return Ok(quote);
+                debug!("quotes result: {}", content);
+                let mut quotes = Vec::new();
+                let regex = Regex::new("hq_str_([a-z0-9]+)=\"(.*)\"").unwrap();
+                for caps in regex.captures_iter(&content) {
+                    let mut quote = quote_from_str(caps.get(2).unwrap().as_str());
+                    quote.symbol = caps.get(1).unwrap().as_str().to_uppercase();
+                    quotes.push(quote);
                 }
-
-                Ok(Quote::default())
+                Ok(quotes)
             }
             Err(err) => bail!(err),
         }
@@ -418,10 +420,11 @@ impl Sina {
         }
     }
 
-    pub async fn quote_ws(symbol: &str, handler: impl Fn(Quote)) {
+    /// 多个时连接时返回所有 之后单个返回
+    pub async fn quotes_ws(symbols: &str, handler: impl Fn(Vec<Quote>)) {
         let req = Request::builder()
             .method(Method::GET)
-            .uri(format!("wss://hq.sinajs.cn/wskt?list={}", symbol.to_lowercase()))
+            .uri(format!("wss://hq.sinajs.cn/wskt?list={}", symbols.to_lowercase()))
             .header(header::ORIGIN, HeaderValue::from_static(PORTAL))
             .body(())
             .unwrap();
@@ -437,11 +440,15 @@ impl Sina {
                         let msg = msg.unwrap();
                         if msg.is_text() {
                             debug!("ws receive msg: {}", msg);
-                            if let Some(caps) = Regex::new("=(.*)\\n").unwrap().captures(&msg.to_string()) {
-                                let mut quote = quote_from_str(caps.get(1).unwrap().as_str());
-                                quote.symbol = symbol.to_string();
-                                handler(quote);
+                            let mut quotes = Vec::new();
+                            let regex = Regex::new("([a-z0-9]+)=(.*)\\n").unwrap();
+                            for caps in regex.captures_iter(&msg.to_string()) {
+                                let mut quote = quote_from_str(caps.get(2).unwrap().as_str());
+                                quote.symbol = caps.get(1).unwrap().as_str().to_uppercase();
+                                quotes.push(quote);
                             }
+
+                            handler(quotes);
                         }
                     }
                 }

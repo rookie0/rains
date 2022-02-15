@@ -1,4 +1,7 @@
-use std::io::{stdout, Write};
+use std::{
+    collections::HashMap,
+    io::{stdout, Write},
+};
 
 use anyhow::{bail, Result};
 use crossterm::{cursor, style::Stylize, ExecutableCommand};
@@ -26,6 +29,7 @@ async fn main() {
 
 // todo use tui table & chart
 
+#[allow(clippy::mutex_atomic)]
 async fn run() -> Result<()> {
     let args = Opts::parse_args()?;
     if args.debug {
@@ -197,31 +201,76 @@ async fn run() -> Result<()> {
                 Err(err) => error!("{}", err),
             }
         }
-        Subcommand::Quote { symbol, realtime, multiline } => match check_symbol(&symbol).await {
-            Ok(symbol) => {
-                if realtime {
-                    Sina::quote_ws(&symbol, |quote: Quote| {
-                        if !multiline {
-                            let mut stdout = stdout();
-                            write_quote(&quote);
-                            stdout.execute(cursor::MoveToPreviousLine(1)).unwrap();
-                            stdout.flush().unwrap();
-                        } else {
-                            write_quote(&quote);
-                        }
-                    })
-                    .await;
+        Subcommand::Quote { symbol, no_check, realtime, multiline } => {
+            let parts = symbol.split(',').collect::<Vec<&str>>();
+            let mut symbols = Vec::new();
+            for symbol in parts {
+                if no_check {
+                    symbols.push(symbol.to_string());
                 } else {
-                    match Sina::default().quote(&symbol).await {
-                        Ok(quote) => {
-                            write_quote(&quote);
-                        }
-                        Err(err) => error!("{}", err),
+                    match check_symbol(symbol).await {
+                        Ok(symbol) => symbols.push(symbol),
+                        Err(err) => error!("{} {}", symbol, err),
                     }
                 }
             }
-            Err(err) => error!("{}", err),
-        },
+
+            let symbols = symbols.join(",");
+            if realtime {
+                // 首次输出
+                let written = std::sync::Mutex::new(false);
+                // 实际数量
+                let len = std::sync::Mutex::new(0);
+                // 位置对应表
+                let lines = std::sync::Mutex::new(HashMap::new());
+                // 当前位置
+                let cur = std::sync::Mutex::new(0);
+                Sina::quotes_ws(&symbols, |quotes: Vec<Quote>| {
+                    let mut l = len.lock().unwrap();
+                    if multiline && quotes.len() == 1 && *l == 0 {
+                        write_quote(quotes.get(0).unwrap());
+                        return;
+                    }
+
+                    let mut stdout = stdout();
+                    let mut w = written.lock().unwrap();
+                    let mut m = lines.lock().unwrap();
+                    let mut c = cur.lock().unwrap();
+                    if !*w {
+                        *l = quotes.len();
+                        *c = quotes.len() - 1;
+                    }
+                    for (i, quote) in quotes.iter().enumerate() {
+                        let k = quote.symbol.to_string();
+                        if *w {
+                            if let Some(line) = m.get(&k) {
+                                if *c >= *line {
+                                    stdout.execute(cursor::MoveToPreviousLine((*c - *line + 1) as u16)).unwrap();
+                                } else if *line > *c + 1 {
+                                    stdout.execute(cursor::MoveToNextLine((*line - *c - 1) as u16)).unwrap();
+                                }
+                                *c = *line;
+                            }
+                        } else {
+                            m.insert(k, i);
+                        }
+                        write_quote(quote);
+                    }
+                    stdout.flush().unwrap();
+                    *w = true;
+                })
+                .await;
+            } else {
+                match SINA.lock().await.quotes(&symbols).await {
+                    Ok(quotes) => {
+                        for quote in quotes.iter() {
+                            write_quote(quote);
+                        }
+                    }
+                    Err(err) => error!("{}", err),
+                }
+            }
+        }
     }
 
     Ok(())
