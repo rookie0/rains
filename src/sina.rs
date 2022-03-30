@@ -47,7 +47,7 @@ impl Sina {
         // type 沪深 11,12,13,14,15  基金 21,22,23,24,25,26  港股 31,32,33 美股 41,42
         match self
             .request(&format!(
-                "https://suggest3.sinajs.cn/suggest/type=11,12,13,14,15,21,22,23,24,25,26,31&key={}",
+                "https://suggest3.sinajs.cn/suggest/type=11,12,13,14,15,21,22,23,24,25,26,31,41&key={}",
                 query
             ))
             .await
@@ -77,7 +77,7 @@ impl Sina {
                             match *v.get(1).unwrap() {
                                 "11" | "12" | "13" | "14" | "15" => {
                                     market = Some(Market::Stock);
-                                    exchange = match Exchange::from_str(&symbol) {
+                                    exchange = match Exchange::from_str(&symbol[..2]) {
                                         Ok(ex) => Some(ex),
                                         Err(_) => None,
                                     }
@@ -89,6 +89,12 @@ impl Sina {
                                     market = Some(Market::Stock);
                                     exchange = Some(Exchange::HKex);
                                     symbol = "HK".to_owned() + &symbol;
+                                }
+                                "41" | "42" => {
+                                    market = Some(Market::Stock);
+                                    // todo exchange check
+                                    // exchange = Some(Exchange::Nyse);
+                                    // symbol = "US".to_owned() + &symbol;
                                 }
                                 _ => {}
                             }
@@ -389,16 +395,10 @@ impl Sina {
 
     /// symbols: sz000001,sh601318
     pub async fn quotes(&self, symbols: &str) -> Result<Vec<Quote>> {
-        match self.request(&format!("https://hq.sinajs.cn/list={}", symbols.to_lowercase())).await {
+        match self.request(&format!("https://hq.sinajs.cn/list={}", fmt_quote_symbols(symbols))).await {
             Ok(content) => {
                 debug!("quotes result: {}", content);
-                let mut quotes = Vec::new();
-                let regex = Regex::new("hq_str_([a-z0-9]+)=\"(.*)\"").unwrap();
-                for caps in regex.captures_iter(&content) {
-                    let mut quote = quote_from_str(caps.get(2).unwrap().as_str());
-                    quote.symbol = caps.get(1).unwrap().as_str().to_uppercase();
-                    quotes.push(quote);
-                }
+                let quotes = quotes_from_str("hq_str_(?:rt_)?([a-z0-9]+)=\"(.*)\"", &content);
                 Ok(quotes)
             }
             Err(err) => bail!(err),
@@ -424,7 +424,7 @@ impl Sina {
     pub async fn quotes_ws(symbols: &str, handler: impl Fn(Vec<Quote>)) {
         let req = Request::builder()
             .method(Method::GET)
-            .uri(format!("wss://hq.sinajs.cn/wskt?list={}", symbols.to_lowercase()))
+            .uri(format!("wss://hq.sinajs.cn/wskt?list={}", fmt_quote_symbols(symbols)))
             .header(header::ORIGIN, HeaderValue::from_static(PORTAL))
             .body(())
             .unwrap();
@@ -440,14 +440,7 @@ impl Sina {
                         let msg = msg.unwrap();
                         if msg.is_text() {
                             debug!("ws receive msg: {}", msg);
-                            let mut quotes = Vec::new();
-                            let regex = Regex::new("([a-z0-9]+)=(.*)\\n").unwrap();
-                            for caps in regex.captures_iter(&msg.to_string()) {
-                                let mut quote = quote_from_str(caps.get(2).unwrap().as_str());
-                                quote.symbol = caps.get(1).unwrap().as_str().to_uppercase();
-                                quotes.push(quote);
-                            }
-
+                            let quotes = quotes_from_str("(?:rt_)?([a-z0-9]+)=(.*)\\n", &msg.to_string());
                             handler(quotes);
                         }
                     }
@@ -458,6 +451,11 @@ impl Sina {
             }
         }
     }
+}
+
+// hk 代码格式 rt_hk00700 获取实时行情
+fn fmt_quote_symbols(symbols: &str) -> String {
+    symbols.to_lowercase().replace("hk", "rt_hk")
 }
 
 // 中国平安,51.020,50.790,49.970,51.350,49.800,49.970,49.980,72935539,3688023391.000,155984,49.970,125200,49.960,95800,49.950,48800,49.940,32300,49.930,174297,49.980,10800,49.990,86300,50.000,3100,50.010,53700,50.020,2022-01-28,15:00:00,00,
@@ -478,6 +476,51 @@ fn quote_from_str(str: &str) -> Quote {
         date: values.get(30).unwrap_or(&"").to_string(),
         time: values.get(31).unwrap_or(&"").to_string(),
     }
+}
+
+// TENCENT,腾讯控股,371.000,366.400,380.400,370.000,377.200,10.800,2.948,377.00000,377.20001,7860991814,20901992,0.000,0.000,658.000,297.000,2022/03/29,16:00
+fn quote_from_str_hk(str: &str) -> Quote {
+    let values: Vec<&str> = str.split(',').collect::<Vec<&str>>();
+    Quote {
+        symbol: "".to_string(),
+        name: values.get(1).unwrap_or(&"").to_string(),
+        now: values.get(6).unwrap_or(&"").parse().unwrap_or(0.0),
+        close: values.get(3).unwrap_or(&"").parse().unwrap_or(0.0),
+        open: values.get(2).unwrap_or(&"").parse().unwrap_or(0.0),
+        high: values.get(4).unwrap_or(&"").parse().unwrap_or(0.0),
+        low: values.get(5).unwrap_or(&"").parse().unwrap_or(0.0),
+        buy: values.get(6).unwrap_or(&"").parse().unwrap_or(0.0),
+        sell: values.get(7).unwrap_or(&"").parse().unwrap_or(0.0),
+        turnover: values.get(12).unwrap_or(&"").parse().unwrap_or(0.0),
+        volume: values.get(11).unwrap_or(&"").parse().unwrap_or(0.0),
+        date: values.get(17).unwrap_or(&"").replace('/', "-"),
+        time: values.get(18).unwrap_or(&"").to_string(),
+    }
+}
+
+fn quotes_from_str(regex: &str, str: &str) -> Vec<Quote> {
+    let mut quotes = Vec::new();
+    let regex = Regex::new(regex).unwrap();
+    for caps in regex.captures_iter(str) {
+        let quote_str = caps.get(2).unwrap().as_str();
+        let symbol = caps.get(1).unwrap().as_str();
+        let mut quote = match Exchange::from_str(&symbol[..2]) {
+            Ok(ex) => match ex {
+                Exchange::Sse | Exchange::SZse | Exchange::Bse => quote_from_str(quote_str),
+                Exchange::HKex => quote_from_str_hk(quote_str),
+                _ => continue,
+            },
+            Err(err) => {
+                debug!("{}", err);
+                continue;
+            }
+        };
+
+        quote.symbol = symbol.to_uppercase();
+        quotes.push(quote);
+    }
+
+    quotes
 }
 
 fn num_from_str(str: &str) -> f64 {

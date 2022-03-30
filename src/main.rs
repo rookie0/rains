@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     io::{stdout, Write},
+    str::FromStr,
 };
 
 use anyhow::{bail, Result};
@@ -9,10 +10,9 @@ use once_cell::sync::Lazy;
 use owo_colors::OwoColorize;
 use rains::{
     cli::{Opts, Subcommand},
-    invest::quote::Quote,
+    invest::{quote::Quote, Exchange, Investment, Market},
     sina::Sina,
 };
-use regex::Regex;
 use tokio::sync::Mutex;
 use tracing::{debug, error};
 use tracing_subscriber::EnvFilter;
@@ -46,14 +46,20 @@ async fn run() -> Result<()> {
                 let limit = if (limit as usize) < results.len() { limit as usize } else { results.len() };
                 for i in 0..limit {
                     let invest = results.get(i).unwrap();
-                    println!("{} \t {}", invest.symbol, invest.name);
+                    println!("{:<8}\t{}", invest.symbol, invest.name);
                 }
             }
             Err(err) => error!("{}", err),
         },
         Subcommand::Info { symbol, all, financials, structure, dividends, presses } => {
             match check_symbol(&symbol).await {
-                Ok(symbol) => {
+                Ok(invest) => {
+                    match invest.exchange {
+                        Some(Exchange::Sse) | Some(Exchange::SZse) | Some(Exchange::Bse) => {}
+                        _ => bail!("当前仅支持沪深北证股票信息查询"),
+                    }
+
+                    let symbol = invest.symbol.clone();
                     match SINA.lock().await.profile(&symbol).await {
                     Ok(profile) => println!(
                         "{}\n证券代码\t{}\n简称历史\t{}\n公司名称\t{}\n上市日期\t{}\n发行价格\t{:.2}\n行业分类\t{}\n主营业务\t{}\n办公地址\t{}\n公司网址\t{}\n当前价格\t{:.2}\n市净率PB\t{:.2}\n市盈率TTM\t{}\n总市值  \t{}\n流通市值\t{}",
@@ -83,22 +89,20 @@ async fn run() -> Result<()> {
                             match SINA.lock().await.financials(&symbol[2..]).await {
                                 Ok(financials) => {
                                     // align todo change
-                                    let cols = vec![
-                                        "截止日期     ",
-                                        "总营收       ",
-                                        "净利润       ",
-                                        "每股净资产    ",
-                                        "每股资本公积金",
-                                    ];
+                                    let cols = vec!["截止日期", "总营收", "净利润", "每股净资产", "每股资本公积金"];
                                     for (i, col) in cols.iter().enumerate() {
-                                        let mut output = String::from(*col);
+                                        let mut output = format!("{:<16}", *col);
                                         for f in financials.iter() {
                                             match i {
-                                                0 => output.push_str(&format!(" \t\t {}", f.date)),
-                                                1 => output.push_str(&format!(" \t\t {}", fmt_num(&f.total_revenue))),
-                                                2 => output.push_str(&format!(" \t\t {}", fmt_num(&f.net_profit))),
-                                                3 => output.push_str(&format!(" \t\t {:.4}", f.ps_net_assets)),
-                                                4 => output.push_str(&format!(" \t\t {:.4}", f.ps_capital_reserve)),
+                                                0 => output.push_str(&format!("\t{:<16}", f.date)),
+                                                1 => output.push_str(&format!("\t{:<16}", fmt_num(&f.total_revenue))),
+                                                2 => output.push_str(&format!("\t{:<16}", fmt_num(&f.net_profit))),
+                                                3 => output
+                                                    .push_str(&format!("\t{:<16}", format!("{:.4}", f.ps_net_assets))),
+                                                4 => output.push_str(&format!(
+                                                    "\t{:<16}",
+                                                    format!("{:.4}", f.ps_capital_reserve)
+                                                )),
                                                 _ => {}
                                             }
                                         }
@@ -114,7 +118,7 @@ async fn run() -> Result<()> {
 
                     if all || structure {
                         println!("\n{}", "股东结构".bold());
-                        let symbol = symbol.clone();
+                        let symbol = invest.symbol.clone();
                         tokio::spawn(async move {
                             match SINA.lock().await.structures(&symbol[2..]).await {
                                 Ok(structures) => {
@@ -146,7 +150,7 @@ async fn run() -> Result<()> {
 
                     if all || dividends {
                         println!("\n{}", "分红送配".bold());
-                        let symbol = symbol.clone();
+                        let symbol = invest.symbol.clone();
                         tokio::spawn(async move {
                             match SINA.lock().await.dividends(&symbol[2..]).await {
                                 Ok(dividends) => {
@@ -183,7 +187,7 @@ async fn run() -> Result<()> {
 
                     if all || presses {
                         println!("\n{}", "最新公告".bold());
-                        let symbol = symbol.clone();
+                        let symbol = invest.symbol.clone();
                         tokio::spawn(async move {
                             match SINA.lock().await.presses(&symbol[2..]).await {
                                 Ok(presses) => {
@@ -209,7 +213,7 @@ async fn run() -> Result<()> {
                     symbols.push(symbol.to_string());
                 } else {
                     match check_symbol(symbol).await {
-                        Ok(symbol) => symbols.push(symbol),
+                        Ok(invest) => symbols.push(invest.symbol),
                         Err(err) => error!("{} {}", symbol, err),
                     }
                 }
@@ -276,18 +280,28 @@ async fn run() -> Result<()> {
     Ok(())
 }
 
-async fn check_symbol(symbol: &str) -> Result<String> {
-    match Regex::new(r"^(SZ|SH|BJ)\d{6}").unwrap().captures(&symbol.to_uppercase()) {
-        Some(_) if symbol.len() == 8 => match SINA.lock().await.search(symbol).await {
-            Ok(res) => {
-                if res.len() != 1 {
-                    bail!("代码错误")
-                }
-                Ok(symbol.to_uppercase())
+async fn check_symbol(symbol: &str) -> Result<Investment> {
+    let invest = match Investment::from_str(symbol) {
+        Ok(invest) => invest,
+        Err(err) => bail!(err),
+    };
+    let mut query = invest.symbol.as_str();
+    if query.starts_with("HK") {
+        query = &query[2..];
+    }
+
+    match SINA.lock().await.search(query).await {
+        Ok(res) => {
+            if res.is_empty() {
+                bail!("代码错误")
             }
-            Err(err) => bail!(err),
-        },
-        _ => bail!("当前仅支持沪深及北证股票信息查询"),
+            let first = res.first().unwrap();
+            if first.market.is_none() || first.market != Some(Market::Stock) {
+                bail!("代码错误")
+            }
+            Ok(first.clone())
+        }
+        Err(err) => bail!(err),
     }
 }
 
@@ -307,7 +321,7 @@ fn write_quote(quote: &Quote) {
     let rate = (quote.now / quote.close - 1.0) * 100.0;
     let now = format!("{:.2} {:.2}%", quote.now, rate);
     println!(
-        "{} {}  {}\t昨收：{:.2}\t今开：{:.2}\t最高：{:.2}\t最低：{:.2}\t成交量：{}手\t成交额：{}元\t{}",
+        "{} {}  {:<16}\t昨收：{:.2}\t今开：{:.2}\t最高：{:.2}\t最低：{:.2}\t成交量：{}手\t成交额：{}元\t{}",
         quote.date,
         quote.time,
         match rate {
@@ -331,4 +345,19 @@ fn write_quote(quote: &Quote) {
         fmt_num(&quote.volume),
         quote.name,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::*;
+
+    #[tokio::test]
+    async fn test_check_symbol() {
+        assert!(check_symbol("sz000001").await.is_ok());
+        assert!(check_symbol("hk00700").await.is_ok());
+        assert!(check_symbol("sh666666").await.is_err());
+        assert!(check_symbol("hk70000").await.is_err());
+        assert!(check_symbol("").await.is_err());
+        assert!(check_symbol("bj").await.is_err());
+    }
 }
