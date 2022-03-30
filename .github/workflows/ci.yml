@@ -8,7 +8,8 @@ on:
 
 jobs:
   build:
-    name: build
+    name: Build
+    needs: [ clippy-fmt-test ]
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -61,6 +62,8 @@ jobs:
           path: target/${{ matrix.target }}/release/rains${{ matrix.ext }}
 
   build-musl:
+    name: Build x86_64-unknown-linux-musl
+    needs: [ clippy-fmt-test ]
     runs-on: ubuntu-latest
     container: clux/muslrust:stable
     steps:
@@ -86,8 +89,8 @@ jobs:
           name: rains-x86_64-unknown-linux-musl
           path: target/x86_64-unknown-linux-musl/release/rains
 
-  clippy-rustfmt:
-    name: clippy-rustfmt
+  clippy-fmt-test:
+    name: Clippy rustfmt test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -114,3 +117,8 @@ jobs:
         with:
           command: fmt
           args: -- --check
+
+      - name: Test
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
