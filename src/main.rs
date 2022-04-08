@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{bail, Result};
-use crossterm::{cursor, style::Stylize, ExecutableCommand};
+use crossterm::{cursor, style::Stylize, terminal, terminal::ClearType, ExecutableCommand};
 use once_cell::sync::Lazy;
 use owo_colors::OwoColorize;
 use rains::{
@@ -258,6 +258,7 @@ async fn run() -> Result<()> {
                         } else {
                             m.insert(k, i);
                         }
+                        stdout.execute(terminal::Clear(ClearType::CurrentLine)).unwrap();
                         write_quote(quote);
                     }
                     stdout.flush().unwrap();
@@ -321,19 +322,13 @@ fn write_quote(quote: &Quote) {
     let rate = (quote.now / quote.close - 1.0) * 100.0;
     let now = format!("{:.2} {:.2}%", quote.now, rate);
     println!(
-        "{} {}  {:<16}\t昨收：{:.2}\t今开：{:.2}\t最高：{:.2}\t最低：{:.2}\t成交量：{}手\t成交额：{}元\t{}",
+        "{} {}  {:<16} \t昨收：{:.2}\t今开：{:.2}\t最高：{:.2}\t最低：{:.2}\t成交量：{}手\t成交额：{}元\t{}",
         quote.date,
         quote.time,
         match rate {
-            _ if rate > 0.0 => {
-                now.red().to_string()
-            }
-            _ if rate < 0.0 => {
-                now.green().to_string()
-            }
-            _ => {
-                now.default_color().to_string()
-            }
+            _ if rate > 0.0 => now.red(),
+            _ if rate < 0.0 => now.green(),
+            _ => now.dark_grey(),
         }
         .bold()
         .underline(),
