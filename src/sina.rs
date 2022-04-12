@@ -160,16 +160,21 @@ impl Sina {
                         1 => {
                             // A,zgpa,8.1000,6.6573,4.6300,43.3277,2859.1461,1828024.141,1083266.4498,1083266.4498,0,CNY,1430.9900,1216.9600,33.8000,1,10.5000,9046.2900,816.3800,88.280,47.300,0.1,中国平安,X|O|0|0|0,55.87|45.71,20210930|27212666666.67,637.4600|81.8240,|,,1/1,EQA,,1.61,50.41|50.41|53.55,保险Ⅱ
                             let info = caps.get(1).unwrap().as_str().split(',').collect::<Vec<&str>>();
-                            let eps = info.get(5).unwrap_or(&"").parse::<f64>().unwrap_or(0.0);
+                            // 每股净资产
+                            let vps = info.get(5).unwrap_or(&"").parse::<f64>().unwrap_or(0.0);
+                            // 总股本
                             let cap = info.get(7).unwrap_or(&"").parse::<f64>().unwrap_or(0.0);
                             let traded_cap = info.get(8).unwrap_or(&"").parse::<f64>().unwrap_or(0.0);
+                            let profit = info.get(18).unwrap_or(&"").parse::<f64>().unwrap_or(0.0);
 
-                            profile.pb = profile.price / eps;
+                            profile.pb = profile.price / vps;
                             profile.pb = if profile.pb.is_nan() { 0.0 } else { profile.pb };
                             profile.category = info.get(34).unwrap_or(&"").to_string();
                             profile.market_cap = profile.price * cap * 10000.0;
                             profile.traded_market_cap = profile.price * traded_cap * 10000.0;
-                            // todo calc profile.pe_ttm
+                            if profit > 0.0 {
+                                profile.pe_ttm = profile.market_cap / profit / 100000000.0
+                            }
                         }
                         _ => {}
                     }

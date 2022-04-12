@@ -62,7 +62,7 @@ async fn run() -> Result<()> {
                     let symbol = invest.symbol.clone();
                     match SINA.lock().await.profile(&symbol).await {
                     Ok(profile) => println!(
-                        "{}\n证券代码\t{}\n简称历史\t{}\n公司名称\t{}\n上市日期\t{}\n发行价格\t{:.2}\n行业分类\t{}\n主营业务\t{}\n办公地址\t{}\n公司网址\t{}\n当前价格\t{:.2}\n市净率PB\t{:.2}\n市盈率TTM\t{}\n总市值  \t{}\n流通市值\t{}",
+                        "{}\n证券代码\t{}\n简称历史\t{}\n公司名称\t{}\n上市日期\t{}\n发行价格\t{:.2}\n行业分类\t{}\n主营业务\t{}\n办公地址\t{}\n公司网址\t{}\n当前价格\t{:.2}\n市净率PB\t{:.2}\n市盈率TTM\t{:.2}\n总市值  \t{}\n流通市值\t{}",
                         "基本信息".bold(),
                         &symbol,
                         profile.used_name,
@@ -75,7 +75,7 @@ async fn run() -> Result<()> {
                         profile.website.underline(),
                         profile.price,
                         profile.pb,
-                        fmt_num(&profile.pe_ttm),
+                        profile.pe_ttm,
                         fmt_num(&profile.market_cap),
                         fmt_num(&profile.traded_market_cap)
                     ),
