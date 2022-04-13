@@ -5,7 +5,7 @@ use std::{f64, str::FromStr, time::Duration};
 use anyhow::{bail, Result};
 use futures_util::{SinkExt, StreamExt};
 use http::{Method, Request};
-use regex::Regex;
+use regex::{Captures, Regex};
 use reqwest::{
     header::{self, HeaderMap, HeaderValue},
     Client, StatusCode,
@@ -16,6 +16,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error};
 
 use crate::invest::{
+    fmt_us_symbol,
     quote::Quote,
     stock::{Dividend, Financial, Holder, Press, Profile, Structure},
     Exchange, Investment, Market,
@@ -42,12 +43,31 @@ impl Sina {
         Sina { client }
     }
 
+    /// 搜索投资品
+    ///
+    /// 类型
+    /// 11 A股
+    /// 12 B股
+    /// 13 权证
+    /// 14 期货
+    /// 15 债券
+    /// 21 开基
+    /// 22 ETF
+    /// 23 LOF
+    /// 24 货基
+    /// 25 QDII
+    /// 26 封基
+    /// 31 港股
+    /// 32 窝轮
+    /// 33 港指数
+    /// 41 美股
+    /// 42 外期
+    /// 81 债券
+    /// 82 债券
     pub async fn search(&self, query: &str) -> Result<Vec<Investment>> {
-        // todo config or args
-        // type 沪深 11,12,13,14,15  基金 21,22,23,24,25,26  港股 31,32,33 美股 41,42
         match self
             .request(&format!(
-                "https://suggest3.sinajs.cn/suggest/type=11,12,13,14,15,21,22,23,24,25,26,31,41&key={}",
+                "https://suggest3.sinajs.cn/suggest/type=11,12,15,21,22,23,24,25,26,31,33,41&key={}",
                 query
             ))
             .await
@@ -75,7 +95,7 @@ impl Sina {
                             let mut market = None;
                             let mut exchange = None;
                             match *v.get(1).unwrap() {
-                                "11" | "12" | "13" | "14" | "15" => {
+                                "11" | "12" | "15" => {
                                     market = Some(Market::Stock);
                                     exchange = match Exchange::from_str(&symbol[..2]) {
                                         Ok(ex) => Some(ex),
@@ -85,16 +105,16 @@ impl Sina {
                                 "21" | "22" | "23" | "24" | "25" | "26" => {
                                     market = Some(Market::Fund);
                                 }
-                                "31" => {
+                                "31" | "33" => {
                                     market = Some(Market::Stock);
                                     exchange = Some(Exchange::HKex);
                                     symbol = "HK".to_owned() + &symbol;
                                 }
-                                "41" | "42" => {
+                                "41" => {
                                     market = Some(Market::Stock);
                                     // todo exchange check
-                                    // exchange = Some(Exchange::Nyse);
-                                    // symbol = "US".to_owned() + &symbol;
+                                    exchange = Some(Exchange::Nasdaq);
+                                    symbol = fmt_us_symbol(&symbol);
                                 }
                                 _ => {}
                             }
@@ -403,7 +423,7 @@ impl Sina {
         match self.request(&format!("https://hq.sinajs.cn/list={}", fmt_quote_symbols(symbols))).await {
             Ok(content) => {
                 debug!("quotes result: {}", content);
-                let quotes = quotes_from_str("hq_str_(?:rt_)?([a-z0-9]+)=\"(.*)\"", &content);
+                let quotes = quotes_from_str("hq_str_(?:rt_)?(?:gb_)?([A-Za-z0-9]+)=\"(.*)\"", &content);
                 Ok(quotes)
             }
             Err(err) => bail!(err),
@@ -445,7 +465,7 @@ impl Sina {
                         let msg = msg.unwrap();
                         if msg.is_text() {
                             debug!("ws receive msg: {}", msg);
-                            let quotes = quotes_from_str("(?:rt_)?([a-z0-9]+)=(.*)\\n", &msg.to_string());
+                            let quotes = quotes_from_str("(?:rt_)?(?:gb_)?([A-Za-z0-9]+)=(.*)\\n", &msg.to_string());
                             handler(quotes);
                         }
                     }
@@ -458,9 +478,16 @@ impl Sina {
     }
 }
 
-// hk 代码格式 rt_hk00700 获取实时行情
+// 港股格式 rt_hk00700
+// 港股指数 rt_hkHSI
+// 美股格式 gb_baba
 fn fmt_quote_symbols(symbols: &str) -> String {
-    symbols.to_lowercase().replace("hk", "rt_hk")
+    Regex::new("hk([a-z]{3})")
+        .unwrap()
+        .replace_all(&symbols.to_lowercase(), |caps: &Captures| format!("hk{}", caps[1].to_uppercase()))
+        .replace("hk", "rt_hk")
+        .replace('$', "gb_")
+        .replace('.', "")
 }
 
 // 中国平安,51.020,50.790,49.970,51.350,49.800,49.970,49.980,72935539,3688023391.000,155984,49.970,125200,49.960,95800,49.950,48800,49.940,32300,49.930,174297,49.980,10800,49.990,86300,50.000,3100,50.010,53700,50.020,2022-01-28,15:00:00,00,
@@ -503,16 +530,38 @@ fn quote_from_str_hk(str: &str) -> Quote {
     }
 }
 
+// 阿里巴巴,101.5500,-1.91,2022-04-12 09:30:09,-1.9800,101.0900,103.9200,99.1600,245.6900,73.2800,23504122,31943686,275293281157,3.76,27.010000,0.00,0.00,0.00,0.00,2710913650,40,101.0000,-0.54,-0.55,Apr 11 07:59PM EDT,Apr 11 04:02PM EDT,103.5300,864695,1,2022,2400782343.0000,103.5966,101.0000,87794835.9332,101.9800
+fn quote_from_str_us(str: &str) -> Quote {
+    let values: Vec<&str> = str.split(',').collect::<Vec<&str>>();
+    let datetime = values.get(3).unwrap_or(&"").split(' ').collect::<Vec<&str>>();
+    Quote {
+        symbol: "".to_string(),
+        name: values.get(0).unwrap_or(&"").to_string(),
+        now: values.get(1).unwrap_or(&"").parse().unwrap_or(0.0),
+        close: values.get(26).unwrap_or(&"").parse().unwrap_or(0.0),
+        open: values.get(5).unwrap_or(&"").parse().unwrap_or(0.0),
+        high: values.get(6).unwrap_or(&"").parse().unwrap_or(0.0),
+        low: values.get(7).unwrap_or(&"").parse().unwrap_or(0.0),
+        buy: values.get(6).unwrap_or(&"").parse().unwrap_or(0.0),
+        sell: values.get(7).unwrap_or(&"").parse().unwrap_or(0.0),
+        turnover: values.get(10).unwrap_or(&"").parse().unwrap_or(0.0),
+        volume: values.get(30).unwrap_or(&"").parse().unwrap_or(0.0),
+        date: datetime.get(0).unwrap_or(&"").to_string(),
+        time: datetime.get(1).unwrap_or(&"").to_string(),
+    }
+}
+
 fn quotes_from_str(regex: &str, str: &str) -> Vec<Quote> {
     let mut quotes = Vec::new();
     let regex = Regex::new(regex).unwrap();
     for caps in regex.captures_iter(str) {
         let quote_str = caps.get(2).unwrap().as_str();
-        let symbol = caps.get(1).unwrap().as_str();
-        let mut quote = match Exchange::from_str(&symbol[..2]) {
+        let invest = Investment::from_str(caps.get(1).unwrap().as_str()).unwrap();
+        let mut quote = match Exchange::from_str(&invest.symbol[..2]) {
             Ok(ex) => match ex {
                 Exchange::Sse | Exchange::SZse | Exchange::Bse => quote_from_str(quote_str),
                 Exchange::HKex => quote_from_str_hk(quote_str),
+                Exchange::Nasdaq => quote_from_str_us(quote_str),
                 _ => continue,
             },
             Err(err) => {
@@ -521,7 +570,7 @@ fn quotes_from_str(regex: &str, str: &str) -> Vec<Quote> {
             }
         };
 
-        quote.symbol = symbol.to_uppercase();
+        quote.symbol = invest.symbol;
         quotes.push(quote);
     }
 
