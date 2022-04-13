@@ -13,6 +13,7 @@ use rains::{
     invest::{quote::Quote, Exchange, Investment, Market},
     sina::Sina,
 };
+use regex::Regex;
 use tokio::sync::Mutex;
 use tracing::{debug, error};
 use tracing_subscriber::EnvFilter;
@@ -286,19 +287,21 @@ async fn check_symbol(symbol: &str) -> Result<Investment> {
         Ok(invest) => invest,
         Err(err) => bail!(err),
     };
-    let mut query = invest.symbol.as_str();
-    if query.starts_with("HK") {
-        query = &query[2..];
+    let query = match invest.symbol {
+        _ if invest.symbol.starts_with("HK") => &invest.symbol[2..],
+        _ if invest.symbol.starts_with('$') => &invest.symbol[1..],
+        _ => &invest.symbol,
     }
+    .replace('.', "");
 
-    match SINA.lock().await.search(query).await {
+    match SINA.lock().await.search(&query).await {
         Ok(res) => {
             if res.is_empty() {
-                bail!("代码错误")
+                bail!("代码错误，查无结果")
             }
             let first = res.first().unwrap();
             if first.market.is_none() || first.market != Some(Market::Stock) {
-                bail!("代码错误")
+                bail!("代码错误，当前只支持股票相关查询")
             }
             Ok(first.clone())
         }
@@ -321,10 +324,15 @@ fn fmt_num(num: &f64) -> String {
 fn write_quote(quote: &Quote) {
     let rate = (quote.now / quote.close - 1.0) * 100.0;
     let now = format!("{:.2} {:.2}%", quote.now, rate);
+    // 港股指数成交额 * 1000
+    let volume =
+        if Regex::new("HK([A-Z]{3})").unwrap().is_match(&quote.symbol) { quote.volume * 1000.0 } else { quote.volume };
+
     println!(
-        "{} {}  {:<16} \t昨收：{:.2}\t今开：{:.2}\t最高：{:.2}\t最低：{:.2}\t成交量：{}手\t成交额：{}元\t{}",
+        "{} {}  {:<8}  {:<16} \t昨收：{:.2}\t今开：{:.2}\t最高：{:.2}\t最低：{:.2}\t成交量：{:<8}\t成交额：{:<8}\t{}",
         quote.date,
         quote.time,
+        quote.symbol,
         match rate {
             _ if rate > 0.0 => now.red(),
             _ if rate < 0.0 => now.green(),
@@ -336,8 +344,8 @@ fn write_quote(quote: &Quote) {
         quote.open,
         quote.high,
         quote.low,
-        fmt_num(&(quote.turnover / 100.0)),
-        fmt_num(&quote.volume),
+        fmt_num(&quote.turnover),
+        fmt_num(&volume),
         quote.name,
     );
 }
@@ -353,6 +361,9 @@ mod tests {
         assert!(check_symbol("sh666666").await.is_err());
         assert!(check_symbol("hk70000").await.is_err());
         assert!(check_symbol("").await.is_err());
-        assert!(check_symbol("bj").await.is_err());
+        assert!(check_symbol("bj").await.is_ok());
+        assert_eq!(check_symbol("baba").await.unwrap().exchange, Some(Exchange::Nasdaq));
+        assert_eq!(check_symbol("$edu").await.unwrap().exchange, Some(Exchange::Nasdaq));
+        assert_eq!(check_symbol("y").await.unwrap().exchange, Some(Exchange::Nasdaq));
     }
 }

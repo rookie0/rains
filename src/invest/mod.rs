@@ -49,6 +49,7 @@ impl FromStr for Exchange {
             "SZ" => Ok(Exchange::SZse),
             "BJ" => Ok(Exchange::Bse),
             "HK" => Ok(Exchange::HKex),
+            _ if &prefix[..1] == "$" => Ok(Exchange::Nasdaq),
             _ => bail!("不支持的交易所：{}", prefix),
         }
     }
@@ -58,24 +59,35 @@ impl FromStr for Investment {
     type Err = Error;
 
     fn from_str(symbol: &str) -> Result<Self, Self::Err> {
-        // ^((SZ|SH|BJ)\d{6}|HK\d{5}|[A-Z][A-Z.]{0,4})
-        match Regex::new(r"^((SZ|SH|BJ)\d{6}|HK\d{5})").unwrap().captures(&symbol.to_uppercase()) {
-            Some(caps) => {
-                let symbol = caps.get(0).unwrap().as_str();
-                let mut invest = Investment {
-                    code: symbol[2..].to_string(),
-                    symbol: symbol.to_string(),
-                    market: Some(Market::Stock),
-                    ..Default::default()
-                };
-                match Exchange::from_str(&symbol[..2]) {
-                    Ok(ex) => invest.exchange = Some(ex),
-                    Err(err) => bail!(err),
-                }
-
-                Ok(invest)
+        let mut invest = Investment { market: Some(Market::Stock), ..Default::default() };
+        if let Some(caps) =
+            Regex::new(r"^((SZ|SH|BJ)\d{6}|HK(\d{5}|[A-Z]{3}))").unwrap().captures(&symbol.to_uppercase())
+        {
+            let symbol = caps.get(0).unwrap().as_str();
+            invest.symbol = symbol.to_string();
+            invest.code = symbol[2..].to_string();
+            match Exchange::from_str(&symbol[..2]) {
+                Ok(ex) => invest.exchange = Some(ex),
+                Err(err) => bail!(err),
             }
-            _ => bail!("当前仅支持沪深北证港股股票"),
+            return Ok(invest);
+        } else if let Some(caps) = Regex::new(r"^[$.]?[A-Z][A-Z.]{0,4}").unwrap().captures(&symbol.to_uppercase()) {
+            let symbol = caps.get(0).unwrap().as_str();
+            invest.symbol = fmt_us_symbol(symbol);
+            invest.code = invest.symbol[1..].to_string();
+            invest.exchange = Some(Exchange::Nasdaq);
+            return Ok(invest);
         }
+
+        bail!("无法识别该股票代码")
+    }
+}
+
+/// 美股代码格式 加前缀 $
+pub fn fmt_us_symbol(symbol: &str) -> String {
+    if symbol.starts_with('$') {
+        symbol.to_string()
+    } else {
+        "$".to_owned() + symbol
     }
 }
