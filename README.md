@@ -39,7 +39,8 @@ rains quote SH601318 -r  中国平安实时行情
 
 rains help info|quote|search      查看命令用法，子命令支持简写 i|q|s
 rains q HK00700,HK09626,SH600519  支持港股行情（暂不支持港股信息查询）
-rains quote SH601318,SZ000001 -r  支持多只股票行情
+rains q \$BILI,BABA,JD            支持美股行情（默认加 $ 前缀区分，命令行需转义，也可不加；暂不支持美股信息查询）
+rains quote SH601318,SZ000001 -r  支持多只股票实时行情
 ```
 
 
