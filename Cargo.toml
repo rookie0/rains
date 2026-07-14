@@ -1,34 +1,40 @@
 [package]
+name = "rains"
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.86"
 authors = ["Y"]
 description = "💹 命令行 A 股沪深北证股票信息行情数据查询工具"
-edition = "2021"
 homepage = "https://github.com/rookie0/rains"
-license = "MIT"
-name = "rains"
-readme = "README.md"
 repository = "https://github.com/rookie0/rains"
-version = "0.2.2"
+license = "MIT"
+readme = "README.md"
+keywords = ["stock", "cli", "finance", "china"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
-clap = { version = "3.0", features = ["derive"] }
-crossterm = "0.22"
+clap = { version = "4.5", features = ["derive"] }
+crossterm = "0.28"
+encoding_rs = "0.8"
 futures-util = "0.3"
-http = "0.2"
-once_cell = "1.9"
-owo-colors = "3"
-regex = "1.5"
-reqwest = "0.11"
-scraper = "0.12"
-serde_json = "1.0"
-tokio = { version = "1", features = ["full"] }
-tokio-tungstenite = { version = "0.16", features = ["native-tls"] }
+regex = "1.11"
+reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+# tokio-tungstenite 0.26 does not select a rustls CryptoProvider itself.
+rustls = { version = "0.23", features = ["ring", "tls12"], default-features = false }
+scraper = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+unicode-width = "0.2"
 
 [profile.release]
 lto = true
 codegen-units = 1
 opt-level = "z"
 panic = "abort"
+strip = true

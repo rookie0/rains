@@ -6,119 +6,114 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
 jobs:
+  quality:
+    name: Rust 1.86 quality gates
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.86
+        uses: dtolnay/rust-toolchain@1.86.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2.9.1
+        with:
+          key: quality-rust-1.86.0
+
+      - name: Check formatting
+        run: cargo +1.86.0 fmt --all -- --check
+
+      - name: Check
+        run: cargo +1.86.0 check --locked --all-targets
+
+      - name: Clippy
+        run: cargo +1.86.0 clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo +1.86.0 test --locked --all-targets
+
+      - name: Test documentation
+        run: cargo +1.86.0 test --locked --doc
+
   build:
-    name: Build
-    needs: [ clippy-fmt-test ]
+    name: Build ${{ matrix.target }}
+    needs: quality
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-apple-darwin
-            os: macos-latest
-            args: --best
-            strip: true
+            os: macos-15-intel
+            archive: rains-x86_64-apple-darwin.tar.gz
+            musl: false
           - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            ext: .exe
-            args: -9
-            strip: false
+            os: windows-2025
+            archive: rains-x86_64-pc-windows-msvc.zip
+            musl: false
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            args: --best --lzma
-            strip: true
+            os: ubuntu-24.04
+            archive: rains-x86_64-unknown-linux-gnu.tar.gz
+            musl: false
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+            archive: rains-x86_64-unknown-linux-musl.tar.gz
+            musl: true
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
-
-      - uses: Swatinem/rust-cache@v1
-
-      - name: Install nightly toolchain
-        uses: actions-rs/toolchain@v1
+        uses: actions/checkout@v7.0.0
         with:
-          target: ${{ matrix.target }}
-          toolchain: nightly
-          profile: minimal
-          override: true
+          persist-credentials: false
 
-      - name: Build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release --target ${{ matrix.target }}
-
-      - name: Compress bianry
-        uses: svenstaro/upx-action@v2
-        with:
-          file: target/${{ matrix.target }}/release/rains${{ matrix.ext }}
-          args: ${{ matrix.args }}
-          strip: ${{ matrix.strip }}
-
-      - name: Upload bianry
-        uses: actions/upload-artifact@v2
-        with:
-          name: rains-${{ matrix.target }}${{ matrix.ext }}
-          path: target/${{ matrix.target }}/release/rains${{ matrix.ext }}
-
-  build-musl:
-    name: Build x86_64-unknown-linux-musl
-    needs: [ clippy-fmt-test ]
-    runs-on: ubuntu-latest
-    container: clux/muslrust:stable
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Build
+      - name: Install musl toolchain
+        if: matrix.musl
         run: |
-          ln -s /root/.cargo $HOME/.cargo
-          ln -s /root/.rustup $HOME/.rustup
-          cargo build --release
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends musl-tools
 
-      - name: Compress bianry
-        uses: svenstaro/upx-action@v2
+      - name: Install Rust 1.86
+        uses: dtolnay/rust-toolchain@1.86.0
         with:
-          file: target/x86_64-unknown-linux-musl/release/rains
-          args: --best --lzma
-          strip: true
+          targets: ${{ matrix.target }}
 
-      - name: Upload bianry
-        uses: actions/upload-artifact@v2
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2.9.1
         with:
-          name: rains-x86_64-unknown-linux-musl
-          path: target/x86_64-unknown-linux-musl/release/rains
+          key: release-rust-1.86.0-${{ matrix.target }}
 
-  clippy-fmt-test:
-    name: Clippy rustfmt test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
+      - name: Build release binary
+        run: cargo +1.86.0 build --release --locked --target ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v1
+      - name: Package Unix binary
+        if: runner.os != 'Windows'
+        run: tar -C "target/${{ matrix.target }}/release" -czf "${{ matrix.archive }}" rains
 
-      - name: Install nightly toolchain
-        uses: actions-rs/toolchain@v1
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "target/${{ matrix.target }}/release/rains.exe" -DestinationPath "${{ matrix.archive }}"
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v7.0.1
         with:
-          toolchain: nightly
-          profile: minimal
-          override: true
-          components: rustfmt, clippy
-
-      - name: Clippy
-        uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: -- -D warnings
-
-      - name: Fmt
-        uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: -- --check
-
-      - name: Test
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
+          path: ${{ matrix.archive }}
+          archive: false
+          if-no-files-found: error
